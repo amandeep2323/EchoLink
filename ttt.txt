@@ -1,0 +1,34 @@
+Step 7 of Frontend Multi-Model Integration
+Files Update (4 files)
+1. src/types.ts 
+
+New ModelInfo type: id, name, description, type, active, model_type, labels_count
+2. src/hooks/useWebSocket.ts 
+
+models state (ModelInfo array)
+activeModelId state (string)
+Handles model_list message → updates models + activeModelId
+Handles model_switched message → updates activeModelId
+switchModel(modelId) function
+getModels() function
+Requests model list on connect
+3. src/components/Settings.tsx 
+
+New Model section at the TOP of settings (before Camera)
+Shows each discovered model as a card with:
+Name + description
+Type badge (fingerspelling/word/sentence)
+Labels count badge
+Green "Active" indicator on current model
+"Activate" button on inactive models
+Empty state: "No models found" with directory path hint
+4. src/App.tsx 
+
+Passes models, activeModelId, onSwitchModel to Settings
+Toast notification on model switch: "🧠 Switched to {name}"
+handleSwitchModel() calls switchModel() from WebSocket hook
+
+Step 8: Persistence - Model Registry
+The ModelRegistry persists the active model in _active_model.txt. On next server start, the previously selected model loads automatically.
+
+Step 9: Hot-swap without pipeline restart — When switching models of the same landmark_source, keep the camera + landmarker running and only swap the classifier. Much faster.

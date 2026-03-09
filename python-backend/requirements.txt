@@ -1,0 +1,46 @@
+# ═══════════════════════════════════════════════
+# SignSpeak Python Backend — Dependencies
+# ═══════════════════════════════════════════════
+# Install: pip install -r requirements.txt
+# Diagnose: python diagnose.py
+# ═══════════════════════════════════════════════
+
+# ── Server ──
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+websockets==15.0.1
+
+# ── Camera & Video ──
+opencv-python-headless==4.11.0.86
+# Pin numpy < 2.0 to avoid compatibility issues with mediapipe/tf2onnx
+numpy>=1.24,<2.0
+
+# ── Audio ──
+sounddevice==0.5.1
+
+# ── ML Inference ──
+# ONNX Runtime — primary inference engine for .onnx models
+onnxruntime==1.22.0
+# For GPU: pip install onnxruntime-gpu instead
+
+# ── Virtual Camera ──
+# Requires OBS Studio installed for the virtual camera driver
+pyvirtualcam==0.12.0
+
+# ── Text-to-Speech ──
+# Primary: Piper TTS (natural voice, requires model files)
+piper-tts
+# Fallback: pyttsx3 (uses Windows SAPI / system voice, no models needed)
+pyttsx3==2.98
+
+# ── Landmark Detection ──
+# MediaPipe for hand landmark extraction
+# If 0.10.14 doesn't work on your system, try just: pip install mediapipe
+mediapipe==0.10.14
+
+# ── Optional: Model Conversion ──
+# Only needed if you want to convert .h5/.keras models locally.
+# We recommend using Kaggle instead (see kaggle_convert_to_onnx.py)
+# tensorflow>=2.16
+# tf2onnx>=1.16.1
+# keras>=3.0

@@ -23,6 +23,8 @@ python-backend/
     ├── models/                      ← Model auto-detection + loading ✅
     │   ├── __init__.py
     │   ├── model_loader.py          ← Unified loader (auto-detect → ONNX Runtime)
+    │   ├── model_config.py          ← model.json schema + validation (Phase 6)
+    │   ├── model_registry.py        ← Model discovery, switching, active model tracking
     │   ├── converter.py             ← .h5/.keras/.tflite → .onnx conversion
     │   └── label_map.py             ← Label loading (JSON, TXT, default A-Z)
     │
@@ -37,7 +39,11 @@ python-backend/
     │   ├── tts_engine.py            ← Piper TTS (offline, neural, threaded queue)
     │   └── virtual_mic.py           ← sounddevice → VB-Audio Virtual Cable
     │
-    └── recognition/                 ← (Phase 4) ML pipeline: landmarks → signs → text
+    └── recognition/                 ← ML pipeline: landmarks → signs → text
+        ├── __init__.py
+        ├── landmarker.py            ← MediaPipe Hands or Holistic landmark extraction
+        ├── recognizer.py            ← Classification, confidence smoothing, accumulation
+        └── spell_corrector.py       ← Spell correction for completed words
 ```
 
 ## Setup
@@ -115,7 +121,7 @@ sign, confidence, top_3 = loader.predict_sign(features)
 - **Sign detection box**: Top-right box showing current sign + confidence bar
 - **Status dot**: Top-left indicator (green = hands detected, amber = idle)
 - **Hand landmarks**: MediaPipe hand connections + points (left=violet, right=green)
-- **Pose landmarks**: Upper body skeleton (shoulders, elbows, wrists)
+- **Pose landmarks**: Upper body skeleton (shoulders, elbows, wrists) — drawn when using Holistic
 - All overlays are optional and individually toggleable
 
 #### `virtual_camera.py` — OBS Virtual Camera Output
@@ -160,6 +166,42 @@ User has model file
                                                        Save .onnx alongside .tflite
                                                        Load .onnx ──→ ✅ Ready
 ```
+
+### `src/recognition/` — Recognition Pipeline
+
+#### `landmarker.py` — MediaPipe Landmark Extraction
+- **Config-driven**: Switches between `mediapipe_hands` (21-point) and `mediapipe_holistic` (55-point) based on `model.json`
+- **Hands mode**: Single hand, 21 landmarks × (x, y, z) for fingerspelling models
+- **Holistic mode**: 55 upper-body keypoints (13 pose + 21 left hand + 21 right hand) for word-level models
+- **Normalization**: Min-max, wrist-relative, or none (configurable)
+- **Drawing**: Pose skeleton, hand connections, face landmarks rendered on frame
+
+#### `recognizer.py` — Sign Classification + Post-Processing
+- **Dual inference modes**:
+  - `single_frame`: Classifies each frame independently (PointNet fingerspelling)
+  - `sequence`: Buffers frames into a rolling window, classifies full sequence (WLASL word-level)
+- **Sequence buffering**: `deque`-based, configurable length from `model.json`
+- **Confidence smoothing**: Rolling average per predicted class
+- **Letter accumulation**: Stability gates, cooldown, progressive acceptance (fingerspelling)
+- **Word emission**: Direct word output with buffer clearing (word-level)
+- **Spell correction**: Optional, applied when words are finalized
+
+#### `spell_corrector.py` — Spell Correction
+- Corrects finalized words using fuzzy matching
+- Enabled/disabled per model via `model.json`
+
+## Model Architecture
+
+The pipeline adapts automatically based on each model's `model.json` configuration:
+
+| Property | Model 1 (PointNet) | Model 2 (WLASL) |
+|----------|-------------------|------------------|
+| **Type** | Fingerspelling | Word-level |
+| **Landmarks** | MediaPipe Hands (21 pts) | MediaPipe Holistic (55 pts) |
+| **Inference** | Single frame | 50-frame sequence |
+| **Input Shape** | `[1, 21, 3]` | `[1, 55, 100]` |
+| **Output** | 24 letters (A-Y) | 2000 words |
+| **Post-Processing** | Misrecognition fixes + spell correction | Confidence smoothing only |
 
 ## Prerequisites
 

@@ -60,6 +60,40 @@ def _diagnose_mediapipe():
     print("=" * 60 + "\n")
 
 
+def _load_mediapipe_holistic():
+    """Load MediaPipe Holistic module. Returns (holistic_module, drawing_utils)."""
+
+    # Strategy 1: Standard import
+    try:
+        import mediapipe as mp
+        if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'holistic'):
+            holistic_mod = mp.solutions.holistic
+            drawing = getattr(mp.solutions, 'drawing_utils', None)
+            print("[Landmarker] \u2713 Loaded Holistic via mp.solutions.holistic")
+            return holistic_mod, drawing
+    except (ImportError, AttributeError) as e:
+        print(f"[Landmarker] Holistic Strategy 1 failed: {e}")
+
+    # Strategy 2: Direct submodule
+    try:
+        from mediapipe.python.solutions import holistic as holistic_mod
+        drawing = None
+        try:
+            from mediapipe.python.solutions import drawing_utils as drawing
+        except ImportError:
+            pass
+        print("[Landmarker] \u2713 Loaded Holistic via mediapipe.python.solutions.holistic")
+        return holistic_mod, drawing
+    except (ImportError, AttributeError) as e:
+        print(f"[Landmarker] Holistic Strategy 2 failed: {e}")
+
+    _diagnose_mediapipe()
+    raise ImportError(
+        "Could not load MediaPipe Holistic.\n"
+        "Try: pip install mediapipe==0.10.14 --force-reinstall"
+    )
+
+
 def _load_mediapipe_hands():
     """Load MediaPipe Hands module. Returns (hands_module, drawing_utils, connections)."""
 
@@ -136,6 +170,7 @@ class Landmarker:
 
         # MediaPipe objects (lazy init)
         self._hands = None
+        self._holistic = None
         self._mp_drawing = None
         self._hand_connections = None
         self._initialized = False
@@ -178,10 +213,32 @@ class Landmarker:
     # ── Initialization ──────────────────────────
 
     def _ensure_initialized(self) -> None:
-        """Lazy-initialize MediaPipe."""
+        """Lazy-initialize MediaPipe (Hands or Holistic based on config)."""
         if self._initialized:
             return
 
+        if self._landmark_source == "mediapipe_holistic":
+            holistic_mod, drawing = _load_mediapipe_holistic()
+            self._mp_drawing = drawing
+
+            self._holistic = holistic_mod.Holistic(
+                static_image_mode=False,
+                model_complexity=self._model_complexity,
+                min_detection_confidence=self._min_detection_confidence,
+                min_tracking_confidence=self._min_tracking_confidence,
+            )
+
+            self._initialized = True
+            print(
+                f"[Landmarker] Initialized (Holistic) — "
+                f"complexity={self._model_complexity}, "
+                f"det_conf={self._min_detection_confidence}, "
+                f"track_conf={self._min_tracking_confidence}, "
+                f"normalize={self._normalize_mode}"
+            )
+            return
+
+        # Default: mediapipe_hands
         hands_mod, drawing, connections = _load_mediapipe_hands()
 
         self._hand_connections = connections
@@ -197,7 +254,7 @@ class Landmarker:
 
         self._initialized = True
         print(
-            f"[Landmarker] Initialized — "
+            f"[Landmarker] Initialized (Hands) — "
             f"complexity={self._model_complexity}, "
             f"det_conf={self._min_detection_confidence}, "
             f"track_conf={self._min_tracking_confidence}, "
@@ -215,10 +272,13 @@ class Landmarker:
         Optional[tuple], Optional[str]
     ]:
         """
-        Process a BGR frame and extract hand landmarks.
+        Process a BGR frame and extract landmarks.
 
         Returns:
             (success, annotated_frame, points, wrist_position, handedness)
+
+        For mediapipe_hands: points shape is (1, 21, 3).
+        For mediapipe_holistic: points shape is (55, 2) — 55 keypoints × (x, y).
         """
         self._ensure_initialized()
 
@@ -226,12 +286,26 @@ class Landmarker:
         frame.flags.writeable = False
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Run MediaPipe
-        results = self._hands.process(rgb_frame)
+        if self._landmark_source == "mediapipe_holistic":
+            return self._process_holistic(frame, rgb_frame, draw_landmarks)
 
+        return self._process_hands(frame, rgb_frame, draw_landmarks)
+
+    # ── Hands Processing (existing) ─────────────
+
+    def _process_hands(
+        self,
+        frame: np.ndarray,
+        rgb_frame: np.ndarray,
+        draw_landmarks: bool,
+    ) -> tuple[
+        bool, np.ndarray, Optional[np.ndarray],
+        Optional[tuple], Optional[str]
+    ]:
+        """Process using MediaPipe Hands (single-hand, 21 landmarks)."""
+        results = self._hands.process(rgb_frame)
         frame.flags.writeable = True
 
-        # No hand detected
         if not results.multi_hand_landmarks:
             return False, frame, None, None, None
 
@@ -277,6 +351,123 @@ class Landmarker:
                 pass
 
         return True, frame, points, wrist_pos, handedness
+
+    # ── Holistic Processing (WLASL 55-point) ───
+
+    # MediaPipe Pose landmark indices for the 13 upper-body/face points
+    # 0=nose, 11=left_shoulder, 12=right_shoulder, 13=left_elbow,
+    # 14=right_elbow, 15=left_wrist, 16=right_wrist,
+    # 2=left_eye_inner, 5=right_eye_inner, 7=left_ear, 8=right_ear
+    _POSE_UPPER_BODY_INDICES = [0, 11, 12, 13, 14, 15, 16, 2, 5, 7, 8]
+
+    def _process_holistic(
+        self,
+        frame: np.ndarray,
+        rgb_frame: np.ndarray,
+        draw_landmarks: bool,
+    ) -> tuple[
+        bool, np.ndarray, Optional[np.ndarray],
+        Optional[tuple], Optional[str]
+    ]:
+        """
+        Process using MediaPipe Holistic — extract 55 upper-body keypoints
+        matching the WLASL OpenPose format:
+          - 13 upper-body/face points (11 pose landmarks + neck + mid-hip placeholder)
+          - 21 left-hand points
+          - 21 right-hand points
+        Returns points as numpy array of shape (55, 2).
+        """
+        results = self._holistic.process(rgb_frame)
+        frame.flags.writeable = True
+
+        # Check if we have any usable landmarks at all
+        has_pose = results.pose_landmarks is not None
+        has_left = results.left_hand_landmarks is not None
+        has_right = results.right_hand_landmarks is not None
+
+        if not has_pose and not has_left and not has_right:
+            return False, frame, None, None, None
+
+        # Draw landmarks on frame
+        if draw_landmarks and self._mp_drawing:
+            try:
+                import mediapipe as mp
+                if has_pose:
+                    self._mp_drawing.draw_landmarks(
+                        frame, results.pose_landmarks,
+                        mp.solutions.holistic.POSE_CONNECTIONS,
+                        self._mp_drawing.DrawingSpec(
+                            color=(255, 100, 0), thickness=2, circle_radius=2
+                        ),
+                        self._mp_drawing.DrawingSpec(
+                            color=(255, 255, 255), thickness=2
+                        ),
+                    )
+                if has_left:
+                    self._mp_drawing.draw_landmarks(
+                        frame, results.left_hand_landmarks,
+                        mp.solutions.holistic.HAND_CONNECTIONS,
+                        self._mp_drawing.DrawingSpec(
+                            color=(200, 0, 200), thickness=2, circle_radius=2
+                        ),
+                        self._mp_drawing.DrawingSpec(
+                            color=(200, 0, 200), thickness=2
+                        ),
+                    )
+                if has_right:
+                    self._mp_drawing.draw_landmarks(
+                        frame, results.right_hand_landmarks,
+                        mp.solutions.holistic.HAND_CONNECTIONS,
+                        self._mp_drawing.DrawingSpec(
+                            color=(0, 200, 0), thickness=2, circle_radius=2
+                        ),
+                        self._mp_drawing.DrawingSpec(
+                            color=(0, 200, 0), thickness=2
+                        ),
+                    )
+            except Exception:
+                pass  # Drawing is optional
+
+        # ── Extract 13 upper-body/face points ──
+        upper_body = np.zeros((13, 2), dtype=np.float32)
+        if has_pose:
+            pose_lm = results.pose_landmarks.landmark
+            # 11 direct pose landmarks
+            for i, idx in enumerate(self._POSE_UPPER_BODY_INDICES):
+                upper_body[i] = [pose_lm[idx].x, pose_lm[idx].y]
+            # Point 12: 'neck' — midpoint of left shoulder (11) and right shoulder (12)
+            upper_body[11] = [
+                (pose_lm[11].x + pose_lm[12].x) / 2.0,
+                (pose_lm[11].y + pose_lm[12].y) / 2.0,
+            ]
+            # Point 13: 'mid-hip' — midpoint of left hip (23) and right hip (24)
+            upper_body[12] = [
+                (pose_lm[23].x + pose_lm[24].x) / 2.0,
+                (pose_lm[23].y + pose_lm[24].y) / 2.0,
+            ]
+
+        # ── Extract 21 left-hand points (pad with zeros if absent) ──
+        left_hand = np.zeros((21, 2), dtype=np.float32)
+        if has_left:
+            for i, lm in enumerate(results.left_hand_landmarks.landmark):
+                left_hand[i] = [lm.x, lm.y]
+
+        # ── Extract 21 right-hand points (pad with zeros if absent) ──
+        right_hand = np.zeros((21, 2), dtype=np.float32)
+        if has_right:
+            for i, lm in enumerate(results.right_hand_landmarks.landmark):
+                right_hand[i] = [lm.x, lm.y]
+
+        # ── Concatenate: 13 + 21 + 21 = 55 points ──
+        points = np.concatenate([upper_body, left_hand, right_hand], axis=0)
+        # points shape: (55, 2)
+
+        # Wrist position for UI (use pose left wrist if available)
+        wrist_pos = None
+        if has_pose:
+            wrist_pos = (pose_lm[15].x, pose_lm[15].y)
+
+        return True, frame, points, wrist_pos, None
 
     # ── Normalization ───────────────────────────
 
@@ -355,6 +546,12 @@ class Landmarker:
             except Exception:
                 pass
             self._hands = None
+        if self._holistic:
+            try:
+                self._holistic.close()
+            except Exception:
+                pass
+            self._holistic = None
         self._mp_drawing = None
         self._hand_connections = None
         self._initialized = False

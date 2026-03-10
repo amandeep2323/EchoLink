@@ -11,7 +11,7 @@
     "max_hands": 2,
     "detection_confidence": 0.5,
     "tracking_confidence": 0.5,
-    "model_complexity": 1,
+    "model_complexity": 0,
     "input_shape": [1, 55, 100],
     "use_dimensions": 2,
     "normalize": "none"
@@ -30,7 +30,7 @@
     "stability_frames": 3,
     "repeat_frames": 20,
     "max_consecutive": 1,
-    "cooldown_frames": 10,
+    "cooldown_frames": 25,
     "diff_cooldown_frames": 5,
     "high_confidence_threshold": 0.80,
     "high_confidence_frames": 2,

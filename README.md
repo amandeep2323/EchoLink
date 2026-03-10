@@ -2,7 +2,7 @@
 
 SignSpeak is a desktop application that captures your webcam, detects American Sign Language gestures in real time using machine learning, converts detected signs into a text transcript, overlays that transcript onto the camera feed, outputs the composited video through a virtual camera, and speaks the transcript via TTS through a virtual microphone.
 
-## Current Status: Phase 5c Complete ✅
+## Current Status: Phase 6 Complete ✅
 
 | Phase | Name | Status |
 |-------|------|--------|
@@ -13,6 +13,7 @@ SignSpeak is a desktop application that captures your webcam, detects American S
 | Phase 5a | Recognition Quality — Confidence smoothing, stability gates, spell correction | ✅ |
 | Phase 5b | UI Polish — Toast notifications, loading states, refined settings | ✅ |
 | Phase 5c | Robustness — Camera recovery, session stats, export, graceful shutdown | ✅ |
+| Phase 6 | Multi-Model — Config-driven pipeline, model registry, WLASL word-level support | ✅ |
 
 ## Quick Start (Windows)
 
@@ -40,9 +41,14 @@ Double-click `start.bat` in the project root. This opens two PowerShell windows:
 ┌──────────────────────┴──────────────────────────────────────────┐
 │  PYTHON BACKEND (FastAPI WebSocket Server on port 8765)         │
 │  ├── Camera Capture (OpenCV, threaded, disconnect recovery)    │
-│  ├── Landmark Extraction (MediaPipe Hands, 21 landmarks)       │
-│  ├── Sign Classifier (PointNet → ONNX Runtime, 24 letters)    │
-│  ├── Letter Accumulation (smoothing, stability, spell correct) │
+│  ├── Landmark Extraction (MediaPipe Hands or Holistic)         │
+│  │     • Hands: 21 landmarks (fingerspelling)                  │
+│  │     • Holistic: 55 upper-body keypoints (word-level)        │
+│  ├── Model Registry (config-driven, hot-swap models)           │
+│  ├── Sign Classifier — two inference modes:                    │
+│  │     • single_frame: PointNet → 24 letters (A-Y)             │
+│  │     • sequence: WLASL Pose-TGCN → 2000 words               │
+│  ├── Post-Processing (smoothing, stability, spell correct)     │
 │  ├── Frame Compositor (transcript bar, sign box, hand label)   │
 │  ├── Virtual Camera (pyvirtualcam → OBS Virtual Camera)        │
 │  ├── TTS Engine (pyttsx3 Windows SAPI / Piper fallback)        │
@@ -83,18 +89,25 @@ pip install -r requirements.txt
 
 ```
 python-backend/models/
-├── sign/                          ← Sign language model
-│   ├── model.onnx                 ← Your ONNX model (from Kaggle conversion)
-│   └── labels.json                ← Label map (from Kaggle conversion)
+├── sign/
+│   ├── _active_model.txt            ← Auto-generated, persists selection
+│   ├── model1/                      ← PointNet Fingerspelling (default)
+│   │   ├── model.json               ← Model configuration
+│   │   ├── model.onnx               ← Model weights
+│   │   └── labels.json              ← Optional label map
+│   └── model2/                      ← WLASL Word-Level (2000 words)
+│       ├── model.json               ← Model configuration
+│       ├── wlasl_pose_tgcn.onnx     ← Model weights
+│       └── labels.json              ← 2000-word label map
 │
-└── tts/                           ← TTS voice (optional — pyttsx3 works without this)
+└── tts/                             ← TTS voice (optional)
     ├── en_US-lessac-medium.onnx         ← Piper voice model
     └── en_US-lessac-medium.onnx.json    ← Piper voice config
 ```
 
 **Sign model formats**: `.onnx` (recommended), `.h5`, `.keras`, `.tflite` (auto-detected)
 
-**Alphabet JSONs**: NOT NEEDED — the 24-letter label map is hardcoded.
+**Model switching**: Select models in Settings → Model Selection. Each model folder must contain a `model.json` that configures the pipeline.
 
 ### 3. Frontend
 
@@ -151,6 +164,17 @@ npm run dev
 | **Session Stats** | Live duration, word count, frame count in footer |
 | **Graceful Shutdown** | First Ctrl+C = graceful, second = force quit |
 | **New Shortcuts** | Ctrl+M (VMic), Ctrl+E (Export), Escape (close settings) |
+
+### Phase 6: Multi-Model & Word-Level Recognition
+
+| Feature | Description |
+|---------|-------------|
+| **Config-Driven Pipeline** | `model.json` in each model folder controls all pipeline behavior |
+| **Model Registry** | Auto-discovers models in subfolders, hot-swap via Settings |
+| **MediaPipe Holistic** | 55-point upper-body landmark extraction (pose + hands) |
+| **Sequence Buffering** | Rolling frame buffer for temporal models (configurable length) |
+| **WLASL Word-Level** | Recognizes 2000 ASL words via Pose-TGCN sequence model |
+| **Dual Inference Modes** | `single_frame` (fingerspelling) and `sequence` (word-level) |
 
 ### Using with Google Meet / Zoom / Teams
 

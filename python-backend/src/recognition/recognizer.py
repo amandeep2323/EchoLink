@@ -146,6 +146,9 @@ class Recognizer:
         self._frames_since_last_accept: int = 999
         self._last_accepted_letter: str = ""
 
+        # ── Sequence buffer (for sequence-based models) ──
+        self._sequence_buffer: deque = deque()
+
         # ── Timing ──
         self._last_hand_time: float = 0.0
         self._last_letter_time: float = 0.0
@@ -236,6 +239,13 @@ class Recognizer:
         self._movement_history = deque(
             self._movement_history,
             maxlen=self._movement_history_size
+        )
+
+        # Resize sequence buffer for sequence-based models
+        seq_len = getattr(config.inference, 'sequence_length', 50)
+        self._sequence_buffer = deque(
+            self._sequence_buffer,
+            maxlen=seq_len
         )
 
         # Load/unload spell corrector based on config
@@ -379,6 +389,24 @@ class Recognizer:
         handedness: Optional[str],
         hands_detected: bool,
     ) -> RecognitionResult:
+        # Branch based on inference type
+        inference_type = "single_frame"
+        if self._config is not None:
+            inference_type = getattr(self._config.inference, 'type', 'single_frame')
+
+        if inference_type == "sequence":
+            return self._process_sequence(points, handedness, hands_detected)
+
+        return self._process_single_frame(points, handedness, hands_detected)
+
+    # ── Single-Frame Processing (PointNet / fingerspelling) ──
+
+    def _process_single_frame(
+        self,
+        points: Optional[np.ndarray],
+        handedness: Optional[str],
+        hands_detected: bool,
+    ) -> RecognitionResult:
         result = RecognitionResult(hands_detected=hands_detected)
         now = time.time()
 
@@ -470,17 +498,148 @@ class Recognizer:
 
         return result
 
+    # ── Sequence Processing (WLASL / word-level) ──
+
+    def _process_sequence(
+        self,
+        points: Optional[np.ndarray],
+        handedness: Optional[str],
+        hands_detected: bool,
+    ) -> RecognitionResult:
+        """Process using sequence buffering for word-level models."""
+        result = RecognitionResult(hands_detected=hands_detected)
+        now = time.time()
+
+        self._frames_since_last_accept += 1
+
+        seq_len = self._sequence_buffer.maxlen or 50
+
+        if hands_detected and points is not None:
+            self._last_hand_time = now
+            self._sentence_complete = False
+            self._word_finalized_this_gap = False
+
+            # Append frame to sequence buffer
+            frame_points = np.array(points, dtype=np.float32)
+            if frame_points.ndim == 1:
+                frame_points = frame_points.reshape(-1, 2)
+            self._sequence_buffer.append(frame_points)
+
+            # Only classify when buffer is full
+            if len(self._sequence_buffer) == seq_len:
+                # Build tensor: stack frames, then flatten x,y per node
+                stacked = np.stack(list(self._sequence_buffer), axis=0)
+                num_nodes = stacked.shape[1]
+                tensor = stacked.transpose(1, 0, 2).reshape(
+                    num_nodes, seq_len * 2
+                )
+                tensor = np.expand_dims(tensor, axis=0).astype(np.float32)
+
+                # Classify
+                word, confidence, top_3 = self._classify_raw(tensor)
+                result.letter = word
+                result.confidence = confidence
+                result.top_3 = top_3
+
+                # Confidence smoothing
+                self._confidence_history.append((word, confidence))
+                smoothed = self._get_smoothed_confidence(word)
+                result.smoothed_confidence = smoothed
+
+                # Gate: smoothed confidence must exceed threshold
+                if smoothed < self._min_smooth_confidence:
+                    # Let deque auto-rotate: pop one oldest frame so next
+                    # frame advances the window by 1
+                    self._sequence_buffer.popleft()
+                    result.rejection_reason = (
+                        f"low confidence ({smoothed:.3f} < {self._min_smooth_confidence:.2f})"
+                    )
+                else:
+                    # Cooldown: same word needs cooldown_frames elapsed
+                    time_since_last = (
+                        now - self._last_letter_time
+                        if self._last_letter_time > 0
+                        else float('inf')
+                    )
+                    cooldown_sec = self._cooldown_frames / 10.0
+                    diff_cooldown_sec = self._diff_cooldown_frames / 10.0
+
+                    is_same = word == self._last_accepted_letter
+                    cd = cooldown_sec if is_same else diff_cooldown_sec
+
+                    if time_since_last < cd:
+                        self._sequence_buffer.popleft()
+                        result.rejection_reason = (
+                            f"cooldown ({time_since_last:.1f}s / {cd:.1f}s)"
+                        )
+                    else:
+                        # ✅ Accept the word
+                        print(
+                            f"[Recognizer] ACCEPT: '{word}' "
+                            f"(raw={confidence:.3f}, smooth={smoothed:.3f})"
+                        )
+                        result.letter_added = True
+                        result.added_letter = word
+                        self._corrected_words.append(word)
+                        self._last_letter_time = now
+                        self._last_accepted_letter = word
+                        self._frames_since_last_accept = 0
+                        # Clear buffer after accepting
+                        self._sequence_buffer.clear()
+                        self._confidence_history.clear()
+            else:
+                result.rejection_reason = (
+                    f"buffering ({len(self._sequence_buffer)}/{seq_len} frames)"
+                )
+        else:
+            # No hands — don't clear buffer (allow brief dropouts)
+            self._confidence_history.clear()
+
+            # Sentence timeout
+            if self._last_hand_time > 0:
+                silence = now - self._last_hand_time
+                if (
+                    silence > self._sentence_timeout
+                    and not self._sentence_complete
+                ):
+                    result.is_sentence_complete = True
+                    self._sentence_complete = True
+
+        # Build transcript
+        result.current_word = ""
+        result.completed_text = self.completed_text
+        result.full_transcript = self.full_transcript
+
+        if result.full_transcript != self._previous_transcript:
+            result.transcript_changed = True
+            self._previous_transcript = result.full_transcript
+
+        return result
+
     # ── Classification ──────────────────────────
 
     def _classify(
         self, points: np.ndarray
     ) -> tuple[str, float, list[dict]]:
+        """Classify single-frame landmarks (PointNet / fingerspelling)."""
         if not self._loader.is_loaded:
             return "", 0.0, []
 
         features = points[:, :, :self._model_input_dim].astype(np.float32)
         sign, confidence, top_3 = self._loader.predict_sign(
             features, top_k=3
+        )
+        return sign, confidence, top_3
+
+    def _classify_raw(
+        self, tensor: np.ndarray
+    ) -> tuple[str, float, list[dict]]:
+        """Classify a pre-formatted tensor (sequence models)."""
+        if not self._loader.is_loaded:
+            return "", 0.0, []
+
+        sign, confidence, top_3 = self._loader.predict_sign(
+            tensor, top_k=3
         )
         return sign, confidence, top_3
 
@@ -686,6 +845,7 @@ class Recognizer:
         self._movement_history.clear()
         self._frames_since_last_accept = 999
         self._last_accepted_letter = ""
+        self._sequence_buffer.clear()
         print("[Recognizer] State reset")
 
     def clear_transcript(self) -> None:
@@ -696,6 +856,7 @@ class Recognizer:
         self._previous_transcript = ""
         self._frames_since_last_accept = 999
         self._last_accepted_letter = ""
+        self._sequence_buffer.clear()
         print("[Recognizer] Transcript cleared")
 
     def get_latest_word(self) -> str:

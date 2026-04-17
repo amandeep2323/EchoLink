@@ -1,5 +1,5 @@
 # ============================================================
-# SignSpeak — Kaggle ONNX Conversion Notebook
+# EchoLink — Kaggle ONNX Conversion Notebook
 # ============================================================
 # 
 # HOW TO USE ON KAGGLE:
@@ -140,7 +140,7 @@ predictions = model.predict(dummy_input, verbose=0)
 print(f"  Test output shape: {predictions.shape}")
 print(f"  Test output (first 5): {predictions[0][:5]}")
 
-# For SignSpeak PointNet: check if model needs 2 or 3 dims
+# For EchoLink PointNet: check if model needs 2 or 3 dims
 if input_shape == (None, 21, 3):
     print()
     print("  PointNet model detected — testing input dimensions:")
@@ -155,7 +155,7 @@ if input_shape == (None, 21, 3):
     except Exception as e:
         print(f"  ✗ Reduced (x,y) inference fails: {type(e).__name__}")
         print(f"  → Model REQUIRES all 3 dims (x,y,z) — Conv1D architecture")
-        print(f"  → SignSpeak will auto-detect this and use 3 dims")
+        print(f"  → EchoLink will auto-detect this and use 3 dims")
 
 LETTERS = "ABCDEFGHIKLMNOPQRSTUVWXY"
 pred_idx = np.argmax(predictions[0])
@@ -284,7 +284,7 @@ print("    python-backend/models/sign/")
 print(f"    ├── {model_basename}.onnx")
 print("    └── labels.json")
 print()
-print("  Then start SignSpeak:")
+print("  Then start EchoLink:")
 print("    cd python-backend")
 print("    python main.py")
 print()

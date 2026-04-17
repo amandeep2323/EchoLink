@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { PipelineSettings } from '@/types';
 
-const STORAGE_KEY = 'signspeak-settings';
+const STORAGE_KEY = 'echolink-settings';
 
 const DEFAULT_SETTINGS: PipelineSettings = {
   camera_index: 0,

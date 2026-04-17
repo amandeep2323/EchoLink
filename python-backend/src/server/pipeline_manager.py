@@ -1,7 +1,7 @@
 """
 Pipeline Manager
 ==================
-Manages the full SignSpeak pipeline lifecycle.
+Manages the full EchoLink pipeline lifecycle.
 
 Phase 6 Step 5:
   - ModelRegistry integration for multi-model support

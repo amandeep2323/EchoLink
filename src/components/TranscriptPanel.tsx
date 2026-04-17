@@ -41,7 +41,7 @@ export function TranscriptPanel({ transcript, onClear }: TranscriptPanelProps) {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const content = [
-      `SignSpeak Transcript`,
+      `EchoLink Transcript`,
       `Date: ${new Date().toLocaleString()}`,
       `${'─'.repeat(40)}`,
       '',
@@ -55,7 +55,7 @@ export function TranscriptPanel({ transcript, onClear }: TranscriptPanelProps) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `signspeak-transcript-${timestamp}.txt`;
+    a.download = `echolink-transcript-${timestamp}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

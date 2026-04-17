@@ -1,6 +1,6 @@
-# SignSpeak — ASL to Speech Desktop Application
+# EchoLink — ASL to Speech Desktop Application
 
-SignSpeak is a desktop application that captures your webcam, detects American Sign Language gestures in real time using machine learning, converts detected signs into a text transcript, overlays that transcript onto the camera feed, outputs the composited video through a virtual camera, and speaks the transcript via TTS through a virtual microphone.
+EchoLink is a desktop application that captures your webcam, detects American Sign Language gestures in real time using machine learning, converts detected signs into a text transcript, overlays that transcript onto the camera feed, outputs the composited video through a virtual camera, and speaks the transcript via TTS through a virtual microphone.
 
 ## Current Status: Phase 6 Complete ✅
 

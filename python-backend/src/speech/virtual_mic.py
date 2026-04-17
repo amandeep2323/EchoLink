@@ -19,9 +19,9 @@ Prerequisites:
 Setup Guide:
   1. Install VB-Audio Virtual Cable from https://vb-audio.com/Cable/
   2. Restart your computer after install
-  3. In SignSpeak: enable VMic — it auto-detects "CABLE Input"
+  3. In EchoLink: enable VMic — it auto-detects "CABLE Input"
   4. In Google Meet: Settings → Audio → Microphone → "CABLE Output (VB-Audio Virtual Cable)"
-  5. Enable TTS in SignSpeak → completed sentences are spoken through the virtual mic
+  5. Enable TTS in EchoLink → completed sentences are spoken through the virtual mic
 
 Usage:
     vmic = VirtualMic()

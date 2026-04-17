@@ -354,12 +354,6 @@ class Landmarker:
 
     # ── Holistic Processing (WLASL 55-point) ───
 
-    # MediaPipe Pose landmark indices for the 13 upper-body/face points
-    # 0=nose, 11=left_shoulder, 12=right_shoulder, 13=left_elbow,
-    # 14=right_elbow, 15=left_wrist, 16=right_wrist,
-    # 2=left_eye_inner, 5=right_eye_inner, 7=left_ear, 8=right_ear
-    _POSE_UPPER_BODY_INDICES = [0, 11, 12, 13, 14, 15, 16, 2, 5, 7, 8]
-
     def _process_holistic(
         self,
         frame: np.ndarray,
@@ -428,46 +422,81 @@ class Landmarker:
             except Exception:
                 pass  # Drawing is optional
 
-        # ── Extract 13 upper-body/face points ──
-        upper_body = np.zeros((13, 2), dtype=np.float32)
-        if has_pose:
-            pose_lm = results.pose_landmarks.landmark
-            # 11 direct pose landmarks
-            for i, idx in enumerate(self._POSE_UPPER_BODY_INDICES):
-                upper_body[i] = [pose_lm[idx].x, pose_lm[idx].y]
-            # Point 12: 'neck' — midpoint of left shoulder (11) and right shoulder (12)
-            upper_body[11] = [
-                (pose_lm[11].x + pose_lm[12].x) / 2.0,
-                (pose_lm[11].y + pose_lm[12].y) / 2.0,
-            ]
-            # Point 13: 'mid-hip' — midpoint of left hip (23) and right hip (24)
-            upper_body[12] = [
-                (pose_lm[23].x + pose_lm[24].x) / 2.0,
-                (pose_lm[23].y + pose_lm[24].y) / 2.0,
-            ]
-
-        # ── Extract 21 left-hand points (pad with zeros if absent) ──
-        left_hand = np.zeros((21, 2), dtype=np.float32)
-        if has_left:
-            for i, lm in enumerate(results.left_hand_landmarks.landmark):
-                left_hand[i] = [lm.x, lm.y]
-
-        # ── Extract 21 right-hand points (pad with zeros if absent) ──
-        right_hand = np.zeros((21, 2), dtype=np.float32)
-        if has_right:
-            for i, lm in enumerate(results.right_hand_landmarks.landmark):
-                right_hand[i] = [lm.x, lm.y]
-
-        # ── Concatenate: 13 + 21 + 21 = 55 points ──
-        points = np.concatenate([upper_body, left_hand, right_hand], axis=0)
-        # points shape: (55, 2)
+        # ── Extract 55 keypoints ──
+        h, w = frame.shape[:2]
+        points = self._extract_wlasl_55_points(results, w, h)
 
         # Wrist position for UI (use pose left wrist if available)
         wrist_pos = None
         if has_pose:
+            pose_lm = results.pose_landmarks.landmark
             wrist_pos = (pose_lm[15].x, pose_lm[15].y)
 
         return True, frame, points, wrist_pos, None
+
+    def _extract_wlasl_55_points(self, results, frame_width: int, frame_height: int) -> np.ndarray:
+        """
+        Extracts exactly 55 points for the WLASL model.
+        Optimized for Zoom/Meet webcam framing (face, arms, hands).
+        Missing or off-screen joints are set to [0.0, 0.0].
+        """
+        points_55 = np.zeros((55, 2), dtype=np.float32)
+
+        # ── 1. BODY POINTS (13 points mapped to OpenPose order) ──
+        if results.pose_landmarks:
+            pl = results.pose_landmarks.landmark
+
+            # Helper: Only use the point if it is clearly visible on camera
+            def get_pt(idx):
+                if pl[idx].visibility > 0.5:
+                    return [pl[idx].x * frame_width, pl[idx].y * frame_height]
+                return [0.0, 0.0]
+
+            # Calculate Neck only if BOTH shoulders are clearly visible
+            if pl[11].visibility > 0.5 and pl[12].visibility > 0.5:
+                neck = [
+                    (pl[11].x + pl[12].x) / 2.0 * frame_width,
+                    (pl[11].y + pl[12].y) / 2.0 * frame_height
+                ]
+            else:
+                neck = [0.0, 0.0]
+
+            # STRICT OPENPOSE ORDER (0 to 12)
+            points_55[0] = get_pt(0)   # Nose
+            points_55[1] = neck        # Neck (Calculated)
+            points_55[2] = get_pt(12)  # R-Shoulder
+            points_55[3] = get_pt(14)  # R-Elbow
+            points_55[4] = get_pt(16)  # R-Wrist
+            points_55[5] = get_pt(11)  # L-Shoulder
+            points_55[6] = get_pt(13)  # L-Elbow
+            points_55[7] = get_pt(15)  # L-Wrist
+            points_55[8] = [0.0, 0.0]  # Mid-Hip (ALWAYS OFF-SCREEN IN WEBCAM)
+            points_55[9] = get_pt(5)   # R-Eye
+            points_55[10] = get_pt(2)  # L-Eye
+            points_55[11] = get_pt(8)  # R-Ear
+            points_55[12] = get_pt(7)  # L-Ear
+
+        # ── 2. LEFT HAND (21 points) ──
+        if results.left_hand_landmarks:
+            if not hasattr(self, '_last_left_hand'):
+                self._last_left_hand = np.zeros((21, 2), dtype=np.float32)
+            for i, lm in enumerate(results.left_hand_landmarks.landmark):
+                points_55[13 + i] = [lm.x * frame_width, lm.y * frame_height]
+                self._last_left_hand[i] = [lm.x * frame_width, lm.y * frame_height]
+        elif hasattr(self, '_last_left_hand'):
+            points_55[13:34] = self._last_left_hand
+
+        # ── 3. RIGHT HAND (21 points) ──
+        if results.right_hand_landmarks:
+            if not hasattr(self, '_last_right_hand'):
+                self._last_right_hand = np.zeros((21, 2), dtype=np.float32)
+            for i, lm in enumerate(results.right_hand_landmarks.landmark):
+                points_55[34 + i] = [lm.x * frame_width, lm.y * frame_height]
+                self._last_right_hand[i] = [lm.x * frame_width, lm.y * frame_height]
+        elif hasattr(self, '_last_right_hand'):
+            points_55[34:55] = self._last_right_hand
+
+        return points_55
 
     # ── Normalization ───────────────────────────
 

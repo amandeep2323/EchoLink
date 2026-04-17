@@ -1,5 +1,5 @@
 """
-SignSpeak Backend — Entry Point
+EchoLink Backend — Entry Point
 ================================
 Starts the FastAPI WebSocket server on port 8765.
 
@@ -39,18 +39,18 @@ def main():
         sig_name = signal.Signals(sig).name
 
         if shutdown_count == 1:
-            print(f"\n[SignSpeak] Received {sig_name}, shutting down gracefully...")
-            print("[SignSpeak] Press Ctrl+C again to force quit")
+            print(f"\n[EchoLink] Received {sig_name}, shutting down gracefully...")
+            print("[EchoLink] Press Ctrl+C again to force quit")
             server.should_exit = True
         elif shutdown_count >= 2:
-            print(f"\n[SignSpeak] Force quit!")
+            print(f"\n[EchoLink] Force quit!")
             sys.exit(1)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
     print("=" * 60)
-    print("  SignSpeak — ASL to Speech Backend")
+    print("  EchoLink — ASL to Speech Backend")
     print("=" * 60)
     print(f"  WebSocket : ws://127.0.0.1:8765/ws")
     print(f"  Health    : http://127.0.0.1:8765/health")
@@ -62,7 +62,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        print("[SignSpeak] Server stopped")
+        print("[EchoLink] Server stopped")
 
 
 if __name__ == "__main__":

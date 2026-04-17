@@ -163,7 +163,7 @@ export function App() {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const content = [
-      'SignSpeak Transcript',
+      'EchoLink Transcript',
       `Date: ${new Date().toLocaleString()}`,
       `Duration: ${formatDuration(sessionDuration)}`,
       '─'.repeat(40),
@@ -179,7 +179,7 @@ export function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `signspeak-transcript-${timestamp}.txt`;
+    a.download = `echolink-transcript-${timestamp}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -277,7 +277,7 @@ export function App() {
           </div>
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-bold bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">
-              SignSpeak
+              EchoLink
             </h1>
             <span className="text-[10px] text-slate-600 font-medium bg-slate-800/60 px-1.5 py-0.5 rounded-full">
               v1.0
@@ -408,7 +408,7 @@ export function App() {
                 </span>
               </>
             )}
-            <span className="text-slate-700">SignSpeak v1.0</span>
+            <span className="text-slate-700">EchoLink v1.0</span>
           </div>
         </div>
       </footer>

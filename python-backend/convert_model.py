@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SignSpeak — Model Conversion Script
+EchoLink — Model Conversion Script
 ======================================
 Converts .h5 / .keras / .tflite models to ONNX format
 for faster inference with ONNX Runtime.
@@ -151,7 +151,7 @@ def convert_to_onnx(model_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SignSpeak Model Converter — .h5/.keras/.tflite → ONNX"
+        description="EchoLink Model Converter — .h5/.keras/.tflite → ONNX"
     )
     parser.add_argument(
         "model_path",

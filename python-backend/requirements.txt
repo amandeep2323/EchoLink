@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════
-# SignSpeak Python Backend — Dependencies
+# EchoLink Python Backend — Dependencies
 # ═══════════════════════════════════════════════
 # Install: pip install -r requirements.txt
 # Diagnose: python diagnose.py

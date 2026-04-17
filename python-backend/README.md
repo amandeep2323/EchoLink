@@ -1,6 +1,6 @@
-# SignSpeak — Python Backend
+# EchoLink — Python Backend
 
-FastAPI WebSocket server that powers the SignSpeak ASL-to-Speech application.
+FastAPI WebSocket server that powers the EchoLink ASL-to-Speech application.
 
 ## Architecture
 

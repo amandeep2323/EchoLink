@@ -1,9 +1,9 @@
 @echo off
-title SignSpeak — ASL to Speech
+title EchoLink — ASL to Speech
 color 0A
 
 echo ============================================================
-echo   SignSpeak — ASL to Speech Desktop Application
+echo   EchoLink — ASL to Speech Desktop Application
 echo ============================================================
 echo.
 echo   Starting backend and frontend servers...
@@ -29,7 +29,7 @@ if %errorlevel% neq 0 (
 
 :: ── Start Backend ──
 echo   [1/2] Starting Python backend...
-start "SignSpeak Backend" powershell -NoExit -Command ^
+start "EchoLink Backend" powershell -NoExit -Command ^
     "Set-Location '%~dp0python-backend'; ^
     if (Test-Path '..\venv\Scripts\Activate.ps1') { & '..\venv\Scripts\Activate.ps1' } ^
     elseif (Test-Path '.\venv\Scripts\Activate.ps1') { & '.\venv\Scripts\Activate.ps1' } ^
@@ -43,14 +43,14 @@ timeout /t 3 /nobreak >nul
 
 :: ── Start Frontend ──
 echo   [2/2] Starting frontend dev server...
-start "SignSpeak Frontend" powershell -NoExit -Command ^
+start "EchoLink Frontend" powershell -NoExit -Command ^
     "Set-Location '%~dp0'; ^
     if (-not (Test-Path 'node_modules')) { echo 'Installing dependencies...'; npm install }; ^
     npm run dev"
 
 echo.
 echo ============================================================
-echo   SignSpeak is starting!
+echo   EchoLink is starting!
 echo.
 echo   Backend:  ws://127.0.0.1:8765/ws
 echo   Frontend: http://localhost:5173

@@ -30,19 +30,19 @@ async def _lifespan(app: FastAPI):
     - Startup:  log ready message
     - Shutdown: stop pipeline, close connections, release resources
     """
-    print("[SignSpeak] Server ready — waiting for connections")
+    print("[EchoLink] Server ready — waiting for connections")
     yield
-    print("[SignSpeak] Shutting down...")
+    print("[EchoLink] Shutting down...")
     await _pipeline.cleanup()
     await _manager.close_all()
-    print("[SignSpeak] Shutdown complete")
+    print("[EchoLink] Shutdown complete")
 
 
 def create_app() -> FastAPI:
     """Build and return the fully-configured FastAPI application."""
 
     app = FastAPI(
-        title="SignSpeak Backend",
+        title="EchoLink Backend",
         description="ASL to Speech — WebSocket server for real-time sign language recognition",
         version="1.0.0",
         lifespan=_lifespan,

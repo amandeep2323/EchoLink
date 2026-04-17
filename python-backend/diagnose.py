@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SignSpeak — Environment Diagnostic Script
+EchoLink — Environment Diagnostic Script
 ==========================================
 Run this to check if all dependencies are installed correctly.
 
@@ -38,7 +38,7 @@ def check(name, test_fn, fix_hint=""):
 def main():
     print()
     print("=" * 60)
-    print("  SignSpeak — Environment Diagnostic")
+    print("  EchoLink — Environment Diagnostic")
     print("=" * 60)
     print(f"  Python: {sys.version}")
     print(f"  Executable: {sys.executable}")

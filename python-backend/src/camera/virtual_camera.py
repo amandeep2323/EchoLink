@@ -4,7 +4,7 @@ Virtual Camera — OBS Virtual Camera Output
 Sends composited video frames to a virtual camera device
 (OBS Virtual Camera) via pyvirtualcam. This allows other
 applications like Google Meet, Zoom, and Teams to use the
-SignSpeak video feed as a camera input.
+EchoLink video feed as a camera input.
 
 Prerequisites:
   - OBS Studio installed (registers the virtual camera driver)

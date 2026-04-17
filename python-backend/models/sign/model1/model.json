@@ -1,0 +1,46 @@
+{
+  "name": "PointNet ASL Fingerspelling",
+  "model_file": "model.onnx",
+  "version": "1.0",
+  "author": "kevinjosethomas",
+  "description": "24-letter ASL fingerspelling recognition using PointNet architecture. Classifies single-frame hand landmarks into letters A-Y (excluding J and Z which require motion). Based on github.com/kevinjosethomas/sign-language-processing.",
+  "type": "fingerspelling",
+
+  "labels": "ABCDEFGHIKLMNOPQRSTUVWXY",
+
+  "input": {
+    "landmark_source": "mediapipe_hands",
+    "max_hands": 1,
+    "detection_confidence": 0.75,
+    "tracking_confidence": 0.75,
+    "model_complexity": 0,
+    "input_shape": [1, 21, 3],
+    "use_dimensions": 3,
+    "normalize": "min_max"
+  },
+
+  "inference": {
+    "type": "single_frame",
+    "confidence_threshold": 0.60,
+    "backend": "onnx",
+    "apply_softmax": true
+  },
+
+  "postprocess": {
+    "misrecognition_fixes": true,
+    "spell_correction": true,
+    "stability_frames": 5,
+    "repeat_frames": 15,
+    "max_consecutive": 2,
+    "cooldown_frames": 5,
+    "diff_cooldown_frames": 2,
+    "high_confidence_threshold": 0.85,
+    "high_confidence_frames": 3,
+    "smooth_window": 10,
+    "min_smooth_confidence": 0.70,
+    "movement_threshold": 0.015,
+    "movement_history": 5,
+    "word_timeout": 1.5,
+    "sentence_timeout": 5.0
+  }
+}

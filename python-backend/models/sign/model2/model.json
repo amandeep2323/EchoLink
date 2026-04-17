@@ -1,0 +1,42 @@
+{
+  "name": "WLASL Pose-TGCN (2000 Words)",
+  "model_file": "wlasl_pose_tgcn.onnx",
+  "version": "1.0",
+  "author": "dxli94",
+  "description": "Word-level sign language recognition using 55 upper-body keypoints via MediaPipe Holistic.",
+  "type": "word_level",
+  "labels": "labels.json",
+  "input": {
+    "landmark_source": "mediapipe_holistic",
+    "max_hands": 2,
+    "detection_confidence": 0.5,
+    "tracking_confidence": 0.5,
+    "model_complexity": 1,
+    "input_shape": [1, 55, 100],
+    "use_dimensions": 2,
+    "normalize": "none"
+  },
+  "inference": {
+    "type": "sequence",
+    "confidence_threshold": 0.30,
+    "backend": "onnx",
+    "sequence_length": 50,
+    "stride": 2,
+    "apply_softmax": true
+  },
+  "postprocess": {
+    "misrecognition_fixes": false,
+    "spell_correction": false,
+    "stability_frames": 3,
+    "repeat_frames": 20,
+    "max_consecutive": 1,
+    "cooldown_frames": 10,
+    "diff_cooldown_frames": 5,
+    "high_confidence_threshold": 0.80,
+    "high_confidence_frames": 2,
+    "smooth_window": 5,
+    "min_smooth_confidence": 0.40,
+    "word_timeout": 2.0,
+    "sentence_timeout": 4.0
+  }
+}

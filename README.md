@@ -2,18 +2,6 @@
 
 SignSpeak is a desktop application that captures your webcam, detects American Sign Language gestures in real time using machine learning, converts detected signs into a text transcript, overlays that transcript onto the camera feed, outputs the composited video through a virtual camera, and speaks the transcript via TTS through a virtual microphone.
 
-## Current Status: Phase 5c Complete ✅
-
-| Phase | Name | Status |
-|-------|------|--------|
-| Phase 1 | Foundation — Camera preview, WebSocket connection, basic UI | ✅ |
-| Phase 2 | Core Pipeline — Sign detection display, transcript panel, status indicators | ✅ |
-| Phase 3 | Output Devices — VCam, TTS, VMic controls, ControlBar, Settings | ✅ |
-| Phase 4 | ML Integration — PointNet recognition, MediaPipe Hands, letter accumulation | ✅ |
-| Phase 5a | Recognition Quality — Confidence smoothing, stability gates, spell correction | ✅ |
-| Phase 5b | UI Polish — Toast notifications, loading states, refined settings | ✅ |
-| Phase 5c | Robustness — Camera recovery, session stats, export, graceful shutdown | ✅ |
-
 ## Quick Start (Windows)
 
 Double-click `start.bat` in the project root. This opens two PowerShell windows:

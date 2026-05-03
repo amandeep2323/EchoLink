@@ -51,10 +51,14 @@ if not defined VENV_PY (
 
 :: ── Start Backend ──
 echo   [1/2] Starting Python backend...
-start "EchoLink Backend" powershell -NoExit -Command ^
-    "Set-Location '%BACKEND_DIR%'; ^
-    if (Test-Path '%VENV_PY%') { Write-Host '[INFO] Using venv python: %VENV_PY%'; & '%VENV_PY%' main.py } ^
-    else { Write-Host '[WARN] No venv found, using system python'; python main.py }"
+if not defined VENV_PY echo   [WARN] No venv found, using system python
+set "PS_BACKEND=Set-Location -LiteralPath '%BACKEND_DIR%';"
+if defined VENV_PY (
+    set "PS_BACKEND=%PS_BACKEND% & '%VENV_PY%' main.py"
+) else (
+    set "PS_BACKEND=%PS_BACKEND% & python main.py"
+)
+start "EchoLink Backend" powershell -NoExit -Command "%PS_BACKEND%"
 
 :: Wait for backend to start
 echo   Waiting for backend to start...
@@ -62,10 +66,7 @@ timeout /t 3 /nobreak >nul
 
 :: ── Start Frontend ──
 echo   [2/2] Starting frontend dev server...
-start "EchoLink Frontend" powershell -NoExit -Command ^
-    "Set-Location '%ROOT%'; ^
-    if (-not (Test-Path 'node_modules')) { echo 'Installing dependencies...'; npm install }; ^
-    npm run dev"
+start "EchoLink Frontend" powershell -NoExit -Command "Set-Location -LiteralPath '%ROOT%'; if (-not (Test-Path 'node_modules')) { Write-Host 'Installing dependencies...'; npm install }; npm run dev"
 
 echo.
 echo ============================================================
@@ -78,5 +79,5 @@ echo   Close this window or press Ctrl+C to stop.
 echo ============================================================
 echo.
 
-:: Wait for user
-pause
+:: Wait for user (skip in VS Code terminal)
+if not defined VSCODE_PID pause

@@ -30,7 +30,7 @@ Double-click `start.bat` in the project root. This opens two PowerShell windows:
 │  ├── Camera preview (base64 JPEG frames from Python backend)   │
 │  ├── Live transcript panel (scrolling text, copy, export)      │
 │  ├── Sign detection display (sign + confidence + top 3)        │
-│  ├── Control bar (Start/Stop, Landmarks, Overlay, TTS, VCam,  │
+│  ├── Control bar (Stop/Restart, Landmarks, Overlay, TTS, VCam, │
 │  │               VMic toggles, threshold slider, camera select)│
 │  ├── Toast notification system (pipeline events, errors)       │
 │  ├── Settings panel (resolution, FPS, voice, device selection) │
@@ -61,7 +61,7 @@ Double-click `start.bat` in the project root. This opens two PowerShell windows:
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Enter` | Start / Stop pipeline |
+| `Ctrl+Enter` | Stop / Restart pipeline |
 | `Ctrl+,` | Open / Close settings |
 | `Ctrl+L` | Toggle landmarks |
 | `Ctrl+T` | Toggle TTS |
@@ -178,7 +178,7 @@ npm run dev
 
 ### Using with Google Meet / Zoom / Teams
 
-1. Start the pipeline (click **▶ Start** or press `Ctrl+Enter`)
+1. Pipeline auto-starts when backend runs (use **Restart** if needed)
 2. Enable **📷 VCam** → select **OBS Virtual Camera** in your video app
 3. Enable **🎤 VMic** → select **VB-Audio Virtual Cable** as your microphone
 4. Enable **🔊 TTS** to speak completed sentences
@@ -190,7 +190,7 @@ npm run dev
 
 | Message Type | Data | Description |
 |---|---|---|
-| `start_pipeline` | `PipelineSettings` | Start the recognition pipeline |
+| `restart_pipeline` | `PipelineSettings` | Restart the recognition pipeline |
 | `stop_pipeline` | `null` | Stop the pipeline |
 | `update_settings` | `Partial<PipelineSettings>` | Update settings live |
 | `get_devices` | `null` | Request available devices |

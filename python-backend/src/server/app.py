@@ -30,7 +30,15 @@ async def _lifespan(app: FastAPI):
     - Startup:  log ready message
     - Shutdown: stop pipeline, close connections, release resources
     """
-    print("[EchoLink] Server ready — waiting for connections")
+    print("[EchoLink] Server ready — auto-starting pipeline")
+    try:
+        await _pipeline.start(None)
+        if _pipeline.is_running:
+            print("[EchoLink] Pipeline auto-started")
+        else:
+            print("[EchoLink] Pipeline did not start (check camera/model availability)")
+    except Exception as e:
+        print(f"[EchoLink] Pipeline auto-start failed: {e}")
     yield
     print("[EchoLink] Shutting down...")
     await _pipeline.cleanup()

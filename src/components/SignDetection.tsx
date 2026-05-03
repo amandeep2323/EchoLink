@@ -169,7 +169,7 @@ export function SignDetection({ data }: SignDetectionProps) {
           <span className="text-4xl mb-3 opacity-40">✋</span>
           <p className="text-sm font-medium text-slate-500">No Signs Detected</p>
           <p className="text-xs text-slate-600 mt-1">
-            Start the pipeline to begin recognition
+            Pipeline auto-starts; use Restart if needed
           </p>
         </div>
       )}

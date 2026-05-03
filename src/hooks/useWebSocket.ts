@@ -220,20 +220,17 @@ export function useWebSocket() {
 
   // ── Pipeline Controls ──
 
-  const startPipeline = useCallback(
+  const restartPipeline = useCallback(
     async (settings: PipelineSettings) => {
-      // Fast path: already connected
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        sendRaw('start_pipeline', settings);
+        sendRaw('restart_pipeline', settings);
         return;
       }
 
-      // Not connected — connect first, then send
       const connected = await connectWs();
       if (connected) {
-        // Small delay to ensure WS is fully ready
         setTimeout(() => {
-          sendRaw('start_pipeline', settings);
+          sendRaw('restart_pipeline', settings);
         }, 50);
       } else {
         addError('Cannot connect to backend — make sure the Python server is running');
@@ -328,7 +325,7 @@ export function useWebSocket() {
     models,
     activeModelId,
     dismissError,
-    startPipeline,
+    restartPipeline,
     stopPipeline,
     updateSettings,
     requestDevices,

@@ -37,7 +37,7 @@ export function App() {
     devices,
     errors,
     dismissError,
-    startPipeline,
+    restartPipeline,
     stopPipeline,
     updateSettings: updateRemoteSettings,
     requestDevices,
@@ -120,11 +120,11 @@ export function App() {
   }, [sessionStart]);
 
   // ── Handlers ──
-  const handleStart = useCallback(() => {
+  const handleRestart = useCallback(() => {
     setPipelineLoading(true);
-    startPipeline(settings);
+    restartPipeline(settings);
     setTimeout(() => setPipelineLoading(false), 15000);
-  }, [startPipeline, settings]);
+  }, [restartPipeline, settings]);
 
   const handleStop = useCallback(() => {
     setPipelineLoading(false);
@@ -196,11 +196,11 @@ export function App() {
   // ── Keyboard Shortcuts ──
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+Enter — Start/Stop pipeline
+      // Ctrl+Enter — Stop/Restart pipeline
       if (e.ctrlKey && e.key === 'Enter') {
         e.preventDefault();
         if (status.pipeline_running) handleStop();
-        else handleStart();
+        else handleRestart();
       }
       // Ctrl+, — Toggle Settings
       else if (e.ctrlKey && e.key === ',') {
@@ -255,7 +255,7 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     status.pipeline_running, settings.show_landmarks, settings.tts_enabled,
-    settings.vmic_enabled, settingsOpen, handleStart, handleStop,
+    settings.vmic_enabled, settingsOpen, handleRestart, handleStop,
     handleSettingChange, handleClearTranscript, handleExportTranscript,
     handleOpenSettings, addToast,
   ]);
@@ -346,8 +346,8 @@ export function App() {
             devices={devices}
             connectionStatus={connectionStatus}
             backendOnline={backendOnline}
-            onStart={handleStart}
             onStop={handleStop}
+            onRestart={handleRestart}
             onSettingChange={handleSettingChange}
           />
         </div>

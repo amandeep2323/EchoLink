@@ -279,6 +279,18 @@ class PipelineManager:
 
         self._task = asyncio.create_task(self._run_loop())
 
+    async def restart(self, settings_data: Optional[dict] = None) -> None:
+        if self._starting:
+            return
+
+        if settings_data is None:
+            settings_data = {k: v for k, v in self._settings.__dict__.items()}
+
+        if self._running:
+            await self.stop()
+
+        await self.start(settings_data)
+
     async def stop(self) -> None:
         if not self._running:
             return

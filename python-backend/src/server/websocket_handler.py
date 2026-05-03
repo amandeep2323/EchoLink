@@ -88,23 +88,20 @@ async def _handle_message(
 ) -> None:
     """Route a parsed client message to the appropriate handler."""
 
-    # ── START PIPELINE ──────────────────────────
-    if msg_type == ClientMessageType.START_PIPELINE:
-        if pipeline.is_running or pipeline._starting:
-            if pipeline.is_running:
-                await manager.send(ws, build_error("Pipeline is already running"))
-            else:
-                await manager.send(ws, build_error("Pipeline is starting — please wait"))
+    # ── RESTART PIPELINE ────────────────────────
+    if msg_type == ClientMessageType.RESTART_PIPELINE:
+        if pipeline._starting:
+            await manager.send(ws, build_error("Pipeline is starting — please wait"))
             return
 
         try:
-            await pipeline.start(data)
+            await pipeline.restart(data)
             status = pipeline.get_status()
             await manager.broadcast(build_status_update(**status))
-            print("[WS] ▶ Pipeline started")
+            print("[WS] ↻ Pipeline restarted")
         except Exception as e:
             await manager.send(
-                ws, build_error(f"Failed to start pipeline: {e}")
+                ws, build_error(f"Failed to restart pipeline: {e}")
             )
 
     # ── STOP PIPELINE ───────────────────────────

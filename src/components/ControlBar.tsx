@@ -7,8 +7,8 @@ interface ControlBarProps {
   devices: DeviceList;
   connectionStatus: ConnectionStatus;
   backendOnline: boolean;
-  onStart: () => void;
   onStop: () => void;
+  onRestart: () => void;
   onSettingChange: (updates: Partial<PipelineSettings>) => void;
 }
 
@@ -65,8 +65,8 @@ export function ControlBar({
   devices,
   connectionStatus,
   backendOnline,
-  onStart,
   onStop,
+  onRestart,
   onSettingChange,
 }: ControlBarProps) {
   // connectionStatus and backendOnline available for future use
@@ -77,25 +77,32 @@ export function ControlBar({
   return (
     <div className="bg-slate-900/80 rounded-xl border border-slate-800/60 p-4 shrink-0">
       <div className="flex flex-wrap items-center gap-3">
-        {/* Start / Stop Button — always clickable */}
+        {/* Stop + Restart */}
         <button
-          onClick={() => {
-            if (isRunning) {
-              onStop();
-            } else {
-              onStart();
-            }
-          }}
+          onClick={onStop}
+          disabled={!isRunning}
           className={cn(
-            'flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all border shadow-sm',
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all border shadow-sm',
             isRunning
               ? 'bg-red-500/15 text-red-400 border-red-500/30 hover:bg-red-500/25 shadow-red-500/5'
-              : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25 shadow-emerald-500/5'
+              : 'bg-slate-800/40 text-slate-500 border-slate-700/40 cursor-not-allowed'
           )}
-          title={isRunning ? 'Stop Pipeline (Ctrl+Enter)' : 'Start Pipeline (Ctrl+Enter)'}
+          title="Stop Pipeline (Ctrl+Enter)"
         >
-          <span className="text-base">{isRunning ? '■' : '▶'}</span>
-          <span>{isRunning ? 'Stop' : 'Start'}</span>
+          <span className="text-base">■</span>
+          <span>Stop</span>
+        </button>
+
+        <button
+          onClick={onRestart}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all border shadow-sm',
+            'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25 shadow-emerald-500/5'
+          )}
+          title="Restart Pipeline"
+        >
+          <span className="text-base">↻</span>
+          <span>Restart</span>
         </button>
 
         {/* Separator */}

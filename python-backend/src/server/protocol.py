@@ -5,7 +5,7 @@ Defines all message types exchanged between frontend and backend,
 plus helper functions to build properly-formatted JSON messages.
 
 Client → Server:
-    start_pipeline, stop_pipeline, update_settings, get_devices,
+    restart_pipeline, stop_pipeline, update_settings, get_devices,
     clear_transcript, get_models, switch_model
 
 Server → Client:
@@ -24,8 +24,8 @@ from typing import Any, Optional
 
 class ClientMessageType(str, Enum):
     """Messages the frontend sends to the backend."""
-    START_PIPELINE = "start_pipeline"
     STOP_PIPELINE = "stop_pipeline"
+    RESTART_PIPELINE = "restart_pipeline"
     UPDATE_SETTINGS = "update_settings"
     GET_DEVICES = "get_devices"
     CLEAR_TRANSCRIPT = "clear_transcript"

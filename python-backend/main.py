@@ -11,13 +11,29 @@ Endpoints:
     Health:     http://127.0.0.1:8765/health
 """
 
+import os
 import sys
 import signal
 import uvicorn
-from src.server.app import create_app
+
+
+def _configure_utf8_output() -> None:
+    """
+    Force UTF-8 stdout/stderr to avoid UnicodeEncodeError on Windows.
+    """
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            # If reconfigure fails, continue with the default encoding.
+            pass
 
 
 def main():
+    _configure_utf8_output()
+    from src.server.app import create_app
     app = create_app()
 
     config = uvicorn.Config(

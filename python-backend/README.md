@@ -22,7 +22,7 @@ python-backend/
     │
     ├── models/                      ← Model auto-detection + loading ✅
     │   ├── __init__.py
-    │   ├── model_loader.py          ← Unified loader (auto-detect → ONNX Runtime)
+    │   ├── model_loader.py          ← Unified loader (OpenVINO IR → ONNX Runtime fallback)
     │   ├── model_config.py          ← model.json schema + validation (Phase 6)
     │   ├── model_registry.py        ← Model discovery, switching, active model tracking
     │   ├── converter.py             ← .h5/.keras/.tflite → .onnx conversion
@@ -36,7 +36,13 @@ python-backend/
     │
     ├── speech/                      ← TTS engine + virtual mic ✅
     │   ├── __init__.py
-    │   ├── tts_engine.py            ← Piper TTS (offline, neural, threaded queue)
+    │   ├── tts_engine.py            ← Multi-backend TTS (Intel OPEA / Piper / pyttsx3)
+    │   ├── opea_tts/                ← Intel OPEA SpeechT5 with OpenVINO IR acceleration
+    │   │   ├── __init__.py
+    │   │   ├── synthesizer.py       ← TTSEngine-compatible wrapper
+    │   │   ├── speecht5_core.py     ← Model loading + synthesis (IR or PyTorch)
+    │   │   ├── backend_detector.py  ← OpenVINO availability detection
+    │   │   └── model_downloader.py  ← HuggingFace auto-download
     │   └── virtual_mic.py           ← sounddevice → VB-Audio Virtual Cable
     │
     └── recognition/                 ← ML pipeline: landmarks → signs → text
@@ -75,36 +81,57 @@ The converter will auto-cache the `.onnx` file next to the original, so this onl
 python main.py
 ```
 
+## Packaging (PyInstaller)
+
+```bash
+pyinstaller --noconfirm --clean --distpath python-backend/dist --workpath python-backend/build python-backend/echolink-backend.spec
+```
+
+Output executable:
+- `python-backend/dist/echolink-backend/echolink-backend.exe`
+
 ## Module Documentation
 
 ### `src/models/` — Model Auto-Detection System
 
-The model loader automatically detects and handles 4 formats:
+The model loader uses a hybrid inference architecture:
 
-| Format   | Extension  | Handling                                     |
-|----------|------------|----------------------------------------------|
-| ONNX     | `.onnx`    | Loaded directly with ONNX Runtime            |
-| Keras    | `.h5`      | Converted to `.onnx` via tf2onnx, then loaded |
-| Keras    | `.keras`   | Converted to `.onnx` via tf2onnx, then loaded |
-| TFLite   | `.tflite`  | Converted to `.onnx` via tf2onnx, then loaded |
+| Format   | Extension  | Handling                                              |
+|----------|------------|-------------------------------------------------------|
+| OpenVINO IR | `.xml`+`.bin` | Loaded directly with OpenVINO Runtime (fastest) |
+| ONNX     | `.onnx`    | OpenVINO if compatible, else ONNX Runtime fallback    |
+| Keras    | `.h5`      | Converted to `.onnx` via tf2onnx, then loaded         |
+| Keras    | `.keras`   | Converted to `.onnx` via tf2onnx, then loaded         |
+| TFLite   | `.tflite`  | Converted to `.onnx` via tf2onnx, then loaded         |
+
+**Inference backends (auto-selected):**
+- **Model 1 (PointNet)** → OpenVINO IR (Intel CPU optimized, LATENCY hint)
+- **Model 2 (WLASL Pose-TGCN)** → OpenVINO IR (Intel CPU optimized, LATENCY hint)
+- **Model 3 (LSTM)** → ONNX Runtime (Loop operator not supported by OpenVINO)
 
 **Key features:**
-- **Auto-discovery**: Scans a directory for model files (priority: .onnx > .h5 > .keras > .tflite)
+- **Auto-discovery**: Scans a directory for model files (priority: .xml > .onnx > .h5 > .keras > .tflite)
+- **OpenVINO IR preference**: If `model.xml` exists beside `model.onnx`, loads the IR directly
+- **Model caching**: OpenVINO compiled models cached at `cache/openvino/` for fast warm starts
 - **Cached conversion**: Converted `.onnx` files are saved alongside the original — only converts once
-- **Stale cache detection**: Re-converts if the source model is newer than the cached `.onnx`
 - **Label map loading**: Auto-discovers `labels.json`, `labels.txt`, etc. or falls back to A-Z
 - **Label validation**: Warns if model output dimensions don't match label count
-- **GPU support**: Optional CUDA acceleration via ONNX Runtime GPU provider
 - **Unified API**: `predict_sign(features)` returns `(sign, confidence, top_3)` regardless of source format
 
 ```python
 from src.models import ModelLoader
 
 loader = ModelLoader()
-loader.load("path/to/model.h5")   # auto-converts to ONNX, loads
-loader.load("path/to/model.onnx") # loads directly
+loader.load_from_config(config)   # Picks best backend (OpenVINO IR → ONNX → Keras)
 
 sign, confidence, top_3 = loader.predict_sign(features)
+print(loader.backend)  # "openvino", "onnx", or "keras"
+```
+
+**Converting models to OpenVINO IR:**
+```bash
+cd python-backend/models/sign
+convert_to_ir.bat          # Converts Model 1 & 2 to IR, skips incompatible Model 3
 ```
 
 ### `src/camera/` — Camera Module
@@ -131,12 +158,18 @@ sign, confidence, top_3 = loader.predict_sign(features)
 
 ### `src/speech/` — Speech Module
 
-#### `tts_engine.py` — Piper TTS Engine
-- **Offline neural TTS**: No cloud API, runs entirely locally
+#### `tts_engine.py` — Multi-Backend TTS Engine
+
+Backend priority (auto mode):
+1. **Intel OPEA SpeechT5** — OpenVINO IR accelerated, offline, natural voice (primary)
+2. **Piper** — Offline, neural, natural voice (fallback)
+3. **pyttsx3** — Windows SAPI voices (last resort)
+
+- **Offline inference**: No cloud API, runs entirely locally
+- **OpenVINO IR acceleration**: Uses pre-compiled IR at `models/tts/speecht5_openvino/` with persistent compile cache at `cache/openvino_tts/`
 - **Synchronous mode**: `synthesize("text")` → numpy int16 array
 - **Async mode**: `speak("text")` queues text, background thread synthesizes, callback delivers audio
-- **Voice model loading**: Auto-finds `.onnx` + `.onnx.json` voice files
-- WAV output → numpy conversion for direct audio processing
+- **Auto-settings sync**: Frontend persisted settings (TTS on/off) automatically applied at startup
 
 #### `virtual_mic.py` — VB-Audio Virtual Cable Output
 - Outputs TTS audio through a virtual audio device
@@ -169,12 +202,13 @@ User has model file
 
 ### `src/recognition/` — Recognition Pipeline
 
-#### `landmarker.py` — MediaPipe Landmark Extraction
-- **Config-driven**: Switches between `mediapipe_hands` (21-point) and `mediapipe_holistic` (55-point) based on `model.json`
+#### `landmarker.py` — MediaPipe/OpenPose Landmark Extraction
+- **Config-driven**: Switches between `mediapipe_hands`, `mediapipe_holistic`, or `openpose` based on `model.json`
 - **Hands mode**: Single hand, 21 landmarks × (x, y, z) for fingerspelling models
 - **Holistic mode**: 55 upper-body keypoints (13 pose + 21 left hand + 21 right hand) for word-level models
-- **Normalization**: Min-max, wrist-relative, or none (configurable)
-- **Drawing**: Pose skeleton, hand connections, face landmarks rendered on frame
+- **OpenPose mode**: BODY_25 + hands mapped to the 55-point WLASL layout
+- **Normalization**: Min-max, wrist-relative, frame, or none (configurable)
+- **Drawing**: Pose skeleton, hand connections, or OpenPose keypoints rendered on frame
 
 #### `recognizer.py` — Sign Classification + Post-Processing
 - **Dual inference modes**:
@@ -194,20 +228,29 @@ User has model file
 
 The pipeline adapts automatically based on each model's `model.json` configuration:
 
-| Property | Model 1 (PointNet) | Model 2 (WLASL) |
-|----------|-------------------|------------------|
-| **Type** | Fingerspelling | Word-level |
-| **Landmarks** | MediaPipe Hands (21 pts) | MediaPipe Holistic (55 pts) |
-| **Inference** | Single frame | 50-frame sequence |
-| **Input Shape** | `[1, 21, 3]` | `[1, 55, 100]` |
-| **Output** | 24 letters (A-Y) | 2000 words |
-| **Post-Processing** | Misrecognition fixes + spell correction | Confidence smoothing only |
+| Property | Model 1 (PointNet) | Model 2 (WLASL) | Model 3 (LSTM) |
+|----------|-------------------|------------------|----------------|
+| **Type** | Fingerspelling | Word-level | Word-level |
+| **Landmarks** | MediaPipe Hands (21 pts) | OpenPose (55 pts) | MediaPipe Holistic (543 pts) |
+| **Inference** | Single frame | 50-frame sequence | 30-frame sequence |
+| **Input Shape** | `[1, 21, 3]` | `[1, 55, 100]` | `[30, 543, 3]` |
+| **Output** | 24 letters (A-Y) | 2000 words | 250 signs |
+| **Runtime** | OpenVINO IR | OpenVINO IR | ONNX Runtime |
+| **Post-Processing** | Misrecognition fixes + spell correction | Confidence smoothing only | Confidence smoothing only |
 
 ## Prerequisites
 
 ### Required Software
 - **OBS Studio** — Virtual camera driver ([download](https://obsproject.com/))
 - **VB-Audio Virtual Cable** — Virtual mic device ([download](https://vb-audio.com/Cable/))
+
+### Optional: OpenPose (for Model 2)
+
+Model2 expects OpenPose keypoints. Install OpenPose and set `OPENPOSE_DIR` so the
+backend can load the Python bindings and model files.
+
+> **Note**: OpenPose is CPU-intensive. A replacement using Intel OpenVINO Human Pose
+> Estimation is planned — see `.kiro/model2plan.md`.
 
 ### Required Models
 - **Sign language model** (`.h5`, `.keras`, `.tflite`, or `.onnx`) in `src/models/`

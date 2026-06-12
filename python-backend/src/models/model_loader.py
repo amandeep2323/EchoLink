@@ -44,7 +44,13 @@ class ModelLoader:
     """
 
     def __init__(self):
-        # ONNX backend
+        # OpenVINO backend
+        self._core = None              # openvino.runtime.Core instance
+        self._compiled_model = None    # OpenVINO CompiledModel
+        self._infer_request = None     # OpenVINO InferRequest
+        self._device: str = "CPU"      # OpenVINO device ("CPU" or "AUTO")
+        
+        # ONNX backend (legacy)
         self._session = None           # onnxruntime.InferenceSession
         self._input_name: str = ""     # ONNX input tensor name
         self._output_name: str = ""    # ONNX output tensor name
@@ -54,11 +60,15 @@ class ModelLoader:
 
         # Common
         self._input_shape: tuple = ()  # Expected input shape
-        self._backend: str = ""        # "onnx" or "keras"
+        self._backend: str = ""        # "onnx", "openvino", or "keras"
         self._labels: Optional[LabelMap] = None
         self._model_path: str = ""
         self._original_format: str = ""
         self._loaded: bool = False
+
+        # Caching (OpenVINO)
+        self._cache_dir: str = "cache/openvino/"
+        self._cache_enabled: bool = True
 
         # Config-driven (Phase 6)
         self._config = None            # ModelConfig if loaded via config
@@ -139,8 +149,25 @@ class ModelLoader:
         preferred_backend = config.inference.backend  # "onnx" or "keras"
 
         if ext == ".onnx":
-            # Direct ONNX — always use ONNX Runtime
-            self._load_onnx_session(model_path, use_gpu)
+            # Check OpenVINO compatibility first
+            if self._is_model_openvino_compatible(model_path):
+                # Prefer a pre-converted OpenVINO IR (.xml) if it exists next to
+                # the ONNX file — produced by models/sign/convert_models_to_ir.py.
+                ir_path = os.path.splitext(model_path)[0] + ".xml"
+                load_target = ir_path if os.path.exists(ir_path) else model_path
+                if load_target == ir_path:
+                    print(f"[ModelLoader]   Found OpenVINO IR: {os.path.basename(ir_path)}")
+                try:
+                    device = "AUTO" if use_gpu else "CPU"
+                    self._load_openvino_model(load_target, device)
+                except Exception as e:
+                    print(f"[ModelLoader] OpenVINO failed: {e}")
+                    print(f"[ModelLoader] Falling back to ONNX Runtime...")
+                    self._load_onnx_session(model_path, use_gpu)
+            else:
+                # Model 3 or other incompatible models — use ONNX Runtime
+                print(f"[ModelLoader] Model not compatible with OpenVINO, using ONNX Runtime")
+                self._load_onnx_session(model_path, use_gpu)
 
         elif ext in (".h5", ".keras"):
             if preferred_backend == "keras":
@@ -284,64 +311,341 @@ class ModelLoader:
         # Fallback: load with Keras directly
         self._load_keras_model(model_path)
 
+    # ── OpenVINO Backend ────────────────────────
+
+    def _initialize_openvino_core(self, device: str = "CPU") -> None:
+        """
+        Initialize OpenVINO Core with configuration.
+        
+        Args:
+            device: Target device ("CPU" or "AUTO")
+        
+        Logs:
+            "[OpenVINO] Runtime initialized"
+            "[OpenVINO] Device: {device}"
+            "[OpenVINO] Model Cache Enabled: {cache_dir}"
+        """
+        try:
+            from openvino import Core
+        except ImportError as e:
+            raise RuntimeError(
+                "Intel OpenVINO Runtime is not installed.\n\n"
+                "To install OpenVINO:\n"
+                "  pip install openvino>=2024.0.0\n\n"
+                "For more information:\n"
+                "  https://docs.openvino.ai/latest/get_started.html"
+            ) from e
+        
+        self._core = Core()
+        self._device = device
+        
+        # Set cache directory
+        if self._cache_enabled:
+            os.makedirs(self._cache_dir, exist_ok=True)
+            self._core.set_property({"CACHE_DIR": self._cache_dir})
+        
+        print(f"[OpenVINO] Runtime initialized")
+        print(f"[OpenVINO] Device: {device}")
+        if self._cache_enabled:
+            print(f"[OpenVINO] Model Cache Enabled: {self._cache_dir}")
+
+    def _load_openvino_model(self, onnx_path: str, device: str = "CPU") -> None:
+        """
+        Load and compile ONNX model with OpenVINO.
+        
+        Args:
+            onnx_path: Path to ONNX model file
+            device: Target device ("CPU" or "AUTO")
+        
+        Raises:
+            RuntimeError: If OpenVINO is not installed
+            ValueError: If model has unsupported operators
+            FileNotFoundError: If ONNX file doesn't exist
+        
+        Logs:
+            "[OpenVINO] Loading model: {path}"
+            "[OpenVINO] Performance Hint: LATENCY"
+            "[OpenVINO] Model compiled with LATENCY hint"
+            "[OpenVINO] Cache hit" or "[OpenVINO] Cache miss"
+            "[OpenVINO] Loaded Model {1|2|3}"
+        """
+        if not os.path.exists(onnx_path):
+            raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
+        
+        # Initialize core if needed
+        if self._core is None:
+            self._initialize_openvino_core(device)
+        
+        print(f"[OpenVINO] Loading model: {onnx_path}")
+        
+        try:
+            # Read ONNX model
+            model = self._core.read_model(model=onnx_path)
+        except Exception as e:
+            if "not supported" in str(e).lower():
+                raise ValueError(
+                    f"Model contains unsupported operators: {onnx_path}\n\n"
+                    f"OpenVINO Error: {e}\n\n"
+                    f"This model cannot be loaded with OpenVINO Runtime.\n"
+                    f"Please check model compatibility:\n"
+                    f"  https://docs.openvino.ai/latest/openvino_docs_MO_DG_"
+                    f"prepare_model_convert_model_Convert_Model_From_ONNX.html"
+                ) from e
+            raise
+        
+        # Get input/output names
+        self._input_name = model.input(0).get_any_name()
+        self._output_name = model.output(0).get_any_name()
+        
+        # Parse input shape (handle dynamic shapes)
+        try:
+            # Try to get static shape
+            raw_shape = model.input(0).shape
+            parsed_shape = []
+            for dim in raw_shape:
+                if isinstance(dim, int):
+                    parsed_shape.append(dim)
+                else:
+                    parsed_shape.append(None)  # dynamic dimension
+            self._input_shape = tuple(parsed_shape)
+        except RuntimeError:
+            # If shape is fully dynamic, get partial shape
+            partial_shape = model.input(0).get_partial_shape()
+            parsed_shape = []
+            for i in range(partial_shape.rank.get_length()):
+                dim = partial_shape.get_dimension(i)
+                if dim.is_static:
+                    parsed_shape.append(dim.get_length())
+                else:
+                    parsed_shape.append(None)  # dynamic dimension
+            self._input_shape = tuple(parsed_shape)
+        
+        # Check cache status before compilation
+        cache_status = self._check_cache_status(onnx_path)
+        print(f"[OpenVINO] {cache_status}")
+        
+        # Compile model with LATENCY hint
+        print(f"[OpenVINO] Performance Hint: LATENCY")
+        config = {"PERFORMANCE_HINT": "LATENCY"}
+        
+        try:
+            self._compiled_model = self._core.compile_model(
+                model=model, 
+                device_name=device,
+                config=config
+            )
+        except Exception as e:
+            if device != "CPU":
+                print(f"[OpenVINO] ⚠ {device} device unavailable, falling back to CPU")
+                print(f"[OpenVINO] Error: {e}")
+                self._compiled_model = self._core.compile_model(
+                    model=model, 
+                    device_name="CPU",
+                    config=config
+                )
+                self._device = "CPU"
+            else:
+                raise RuntimeError(
+                    f"Failed to compile model: {onnx_path}\n"
+                    f"Device: {device}\n"
+                    f"Performance Hint: LATENCY\n\n"
+                    f"OpenVINO Error: {e}\n\n"
+                    f"Possible causes:\n"
+                    f"  - Incompatible model architecture\n"
+                    f"  - Insufficient memory\n"
+                    f"  - Corrupted model file\n\n"
+                    f"Try:\n"
+                    f"  - Verify ONNX file integrity\n"
+                    f"  - Check system resources\n"
+                    f"  - Update OpenVINO to latest version"
+                ) from e
+        
+        print(f"[OpenVINO] Model compiled with LATENCY hint")
+        
+        # Create inference request
+        self._infer_request = self._compiled_model.create_infer_request()
+        
+        # Save cache metadata after successful compilation
+        if self._cache_enabled:
+            try:
+                self._save_cache_metadata(onnx_path)
+            except Exception as e:
+                print(f"[OpenVINO] ⚠ Failed to save cache metadata: {e}")
+        
+        self._backend = "openvino"
+        self._loaded = True
+        
+        # Log which model was loaded
+        model_name = self._get_model_name_from_path(onnx_path)
+        print(f"[OpenVINO] Loaded {model_name}")
+
+    def _check_cache_status(self, onnx_path: str) -> str:
+        """
+        Check if compiled model cache exists and is valid.
+        
+        Args:
+            onnx_path: Path to source ONNX file
+        
+        Returns:
+            Status string: "Cache hit" or "Cache miss"
+        
+        Cache validation:
+            - Check if cache directory exists for this model
+            - Compare ONNX file timestamp with cache metadata
+            - Verify OpenVINO version matches
+        """
+        if not self._cache_enabled:
+            return "Cache disabled"
+        
+        cache_key = self._generate_cache_key(onnx_path)
+        cache_path = os.path.join(self._cache_dir, cache_key)
+        meta_path = os.path.join(cache_path, "cache.meta")
+        
+        if not os.path.exists(cache_path):
+            return "Cache miss"
+        
+        if not os.path.exists(meta_path):
+            return "Cache miss"
+        
+        # Validate cache freshness
+        try:
+            import json
+            with open(meta_path, 'r') as f:
+                metadata = json.load(f)
+            
+            onnx_mtime = os.path.getmtime(onnx_path)
+            cache_mtime = metadata.get('source_mtime', 0)
+            
+            if onnx_mtime > cache_mtime:
+                return "Cache miss (source modified)"
+            
+            return "Cache hit"
+        except Exception:
+            return "Cache miss (validation failed)"
+
+    def _generate_cache_key(self, model_path: str) -> str:
+        """Generate unique cache key for model."""
+        import hashlib
+        try:
+            from openvino import get_version
+            ov_version = get_version()
+        except:
+            ov_version = "unknown"
+        
+        key_data = f"{os.path.abspath(model_path)}_{self._device}_LATENCY_{ov_version}"
+        return hashlib.md5(key_data.encode()).hexdigest()[:16]
+
+    def _save_cache_metadata(self, source_path: str) -> None:
+        """Save cache metadata for validation."""
+        import json
+        try:
+            from openvino import get_version
+            ov_version = get_version()
+        except:
+            ov_version = "unknown"
+        
+        cache_key = self._generate_cache_key(source_path)
+        cache_path = os.path.join(self._cache_dir, cache_key)
+        os.makedirs(cache_path, exist_ok=True)
+        
+        metadata = {
+            'source_path': os.path.abspath(source_path),
+            'source_mtime': os.path.getmtime(source_path),
+            'openvino_version': ov_version,
+            'device': self._device,
+            'performance_hint': 'LATENCY',
+            'created_at': time.time(),
+            'cache_key': cache_key
+        }
+        
+        meta_path = os.path.join(cache_path, "cache.meta")
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+    def _get_model_name_from_path(self, path: str) -> str:
+        """Extract model identifier from path for logging."""
+        if "model1" in path:
+            return "Model 1"
+        elif "model2" in path or "wlasl" in path.lower():
+            return "Model 2"
+        elif "model3" in path:
+            return "Model 3"
+        return "Model"
+
+    def _is_model_openvino_compatible(self, onnx_path: str) -> bool:
+        """
+        Check if model is compatible with OpenVINO.
+        
+        Smart backend detection: Only Model 1 and Model 2 are compatible.
+        Model 3 has unsupported Loop operator.
+        
+        Args:
+            onnx_path: Path to ONNX model file
+            
+        Returns:
+            True if model is compatible with OpenVINO, False otherwise
+        """
+        # Check path for model identifier
+        if "model3" in onnx_path.lower():
+            return False  # Model 3 is incompatible (Loop operator issue)
+        
+        # Model 1 and Model 2 are compatible
+        if "model1" in onnx_path.lower() or "model2" in onnx_path.lower() or "wlasl" in onnx_path.lower():
+            return True
+        
+        # Default: assume compatible and let OpenVINO try
+        return True
+
     # ── ONNX Session ───────────────────────────
 
     def _load_onnx_session(self, onnx_path: str, use_gpu: bool = False) -> None:
-        """Initialize the ONNX Runtime inference session."""
-        try:
-            import onnxruntime as ort
-        except ImportError as e:
-            raise RuntimeError(
-                f"ONNX Runtime not installed: {e}\n"
-                f"Install with: pip install onnxruntime"
-            ) from e
-
-        providers = []
-        if use_gpu:
-            if "CUDAExecutionProvider" in ort.get_available_providers():
-                providers.append("CUDAExecutionProvider")
-                print("[ModelLoader] Using CUDA GPU acceleration")
-            else:
-                print("[ModelLoader] CUDA not available — using CPU")
-        providers.append("CPUExecutionProvider")
-
+        """
+        Load ONNX model using ONNX Runtime.
+        
+        This is the fallback method for models incompatible with OpenVINO.
+        Model 3 uses this path due to Loop operator incompatibility.
+        
+        Args:
+            onnx_path: Path to ONNX model file
+            use_gpu: If True, use GPU execution provider
+        """
+        import onnxruntime as ort
+        
+        print(f"[ONNX Runtime] Loading model: {onnx_path}")
+        
+        # Configure session options
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 4
-
+        
+        # Set execution providers
+        providers = []
+        if use_gpu:
+            providers.append('CUDAExecutionProvider')
+        providers.append('CPUExecutionProvider')
+        
+        print(f"[ONNX Runtime] Execution providers: {providers}")
+        
+        # Create inference session
         self._session = ort.InferenceSession(
             onnx_path,
             sess_options=sess_options,
-            providers=providers,
+            providers=providers
         )
-
-        inputs = self._session.get_inputs()
-        outputs = self._session.get_outputs()
-
-        if not inputs or not outputs:
-            raise RuntimeError("ONNX model has no inputs or outputs")
-
-        self._input_name = inputs[0].name
-        self._output_name = outputs[0].name
+        
+        # Get input/output names and shapes
+        input_meta = self._session.get_inputs()[0]
+        output_meta = self._session.get_outputs()[0]
+        
+        self._input_name = input_meta.name
+        self._output_name = output_meta.name
+        self._input_shape = tuple(input_meta.shape)
+        
         self._backend = BACKEND_ONNX
         self._loaded = True
-
-        # Parse input shape — handle dynamic dims
-        raw_shape = inputs[0].shape
-        parsed_shape = []
-        for dim in raw_shape:
-            if isinstance(dim, int):
-                parsed_shape.append(dim)
-            else:
-                parsed_shape.append(None)  # dynamic dimension
-        self._input_shape = tuple(parsed_shape)
-
-        print(
-            f"[ModelLoader] ONNX session — "
-            f"provider: {self._session.get_providers()[0]}, "
-            f"input: {self._input_name} {self._input_shape}, "
-            f"output: {self._output_name}"
-        )
+        
+        print(f"[ONNX Runtime] Model loaded successfully")
+        print(f"[ONNX Runtime]   Input: {self._input_name} {self._input_shape}")
+        print(f"[ONNX Runtime]   Output: {self._output_name} {output_meta.shape}")
 
     # ── Keras Direct Loading ────────────────────
 
@@ -369,7 +673,24 @@ class ModelLoader:
 
         num_output = None
 
-        if self._backend == BACKEND_ONNX and self._session:
+        if self._backend == "openvino" and self._compiled_model:
+            # Get output shape from OpenVINO compiled model
+            outputs = self._compiled_model.outputs
+            if outputs and len(outputs) > 0:
+                try:
+                    # Try to get static shape
+                    shape = outputs[0].shape
+                    if len(shape) >= 1 and isinstance(shape[-1], int):
+                        num_output = shape[-1]
+                except RuntimeError:
+                    # Handle dynamic shape
+                    partial_shape = outputs[0].get_partial_shape()
+                    if partial_shape.rank.get_length() >= 1:
+                        last_dim = partial_shape.get_dimension(partial_shape.rank.get_length() - 1)
+                        if last_dim.is_static:
+                            num_output = last_dim.get_length()
+
+        elif self._backend == BACKEND_ONNX and self._session:
             outputs = self._session.get_outputs()
             if outputs and outputs[0].shape:
                 shape = outputs[0].shape
@@ -392,8 +713,9 @@ class ModelLoader:
 
     def predict_raw(self, features: np.ndarray) -> np.ndarray:
         """
-        Run raw inference. Returns the model's output tensor.
-        Works with both ONNX and Keras backends.
+        Run raw inference using OpenVINO or ONNX Runtime.
+        Returns the model's output tensor.
+        Works with OpenVINO, ONNX, and Keras backends.
         """
         if not self._loaded:
             raise RuntimeError("Model not loaded — call load() first")
@@ -401,7 +723,38 @@ class ModelLoader:
         if features.dtype != np.float32:
             features = features.astype(np.float32)
 
-        if self._backend == BACKEND_ONNX:
+        if self._backend == "openvino":
+            # Validate input shape
+            expected_shape = self._input_shape
+            if features.shape != expected_shape:
+                # Handle dynamic dimensions (None) — only compare static dims
+                same_rank = len(features.shape) == len(expected_shape)
+                dims_ok = same_rank and all(
+                    exp is None or exp == act
+                    for exp, act in zip(expected_shape, features.shape)
+                )
+                if not dims_ok:
+                    model_name = self._get_model_name_from_path(self._model_path)
+                    raise ValueError(
+                        f"Input shape mismatch for {model_name}.\n"
+                        f"  Expected: {expected_shape} (None = dynamic dimension)\n"
+                        f"  Received: {features.shape}\n\n"
+                        f"Check the preprocessing pipeline produces the correct "
+                        f"tensor shape before calling predict_raw()."
+                    )
+            
+            # Run inference
+            result = self._infer_request.infer(
+                inputs={self._input_name: features}
+            )
+            
+            # Extract output tensor
+            output = result[self._output_name]
+            
+            # Convert to numpy array
+            return np.array(output)
+
+        elif self._backend == BACKEND_ONNX:
             outputs = self._session.run(
                 [self._output_name],
                 {self._input_name: features},
@@ -471,6 +824,15 @@ class ModelLoader:
 
     def unload(self) -> None:
         """Release the model and free memory."""
+        if self._compiled_model:
+            del self._compiled_model
+            self._compiled_model = None
+        if self._infer_request:
+            del self._infer_request
+            self._infer_request = None
+        if self._core:
+            del self._core
+            self._core = None
         if self._session:
             del self._session
             self._session = None

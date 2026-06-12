@@ -28,9 +28,10 @@ from typing import Optional
 class InputConfig:
     """How the model expects input data."""
 
-    # Which MediaPipe model to use for landmarks
-    # "mediapipe_hands" → 21 landmarks per hand (current)
-    # "mediapipe_holistic" → hands + pose (future)
+    # Landmark source
+    # "mediapipe_hands" → 21 landmarks per hand
+    # "mediapipe_holistic" → hands + pose
+    # "openpose" → BODY_25 + hands (OpenPose)
     landmark_source: str = "mediapipe_hands"
 
     # MediaPipe parameters
@@ -38,6 +39,16 @@ class InputConfig:
     detection_confidence: float = 0.75
     tracking_confidence: float = 0.75
     model_complexity: int = 0
+
+    # OpenPose parameters (used when landmark_source == "openpose")
+    openpose_model_folder: str = ""
+    openpose_net_resolution: str = "-1x368"
+    openpose_hand: bool = True
+    openpose_face: bool = False
+
+    # Performance optimization (for heavy models like OpenPose)
+    camera_resolution: list[int] = field(default_factory=lambda: [1280, 720])
+    recognition_frame_skip: int = 1  # Process every Nth frame (1 = every frame)
 
     # Model input shape (batch, landmarks, dims)
     # e.g., [1, 21, 3] for PointNet, [1, 30, 177] for LSTM
@@ -48,10 +59,16 @@ class InputConfig:
     use_dimensions: str | int = "auto"
 
     # Normalization method:
-    # "min_max" — normalize each axis to [0,1] independently (current)
+    # "min_max" — normalize each axis to [0,1] independently
     # "wrist_relative" — subtract wrist position, scale by shoulder width
+    # "frame" — normalize using frame width/height
     # "none" — pass raw landmarks
     normalize: str = "min_max"
+
+    # Feature extraction mode (for special models):
+    # "full" — use all keypoints (default)
+    # "aggregate_3d" — extract 3 aggregate features per frame (for Model3)
+    feature_mode: str = "full"
 
     @classmethod
     def from_dict(cls, data: dict) -> "InputConfig":
@@ -83,6 +100,11 @@ class InferenceConfig:
     # Sequence model parameters (only used if type == "sequence")
     sequence_length: int = 30    # Number of frames per sequence
     stride: int = 5              # Frames to skip between sequences
+
+    # Tensor format for sequence models:
+    # "nodes_first" — [batch, nodes, frames*coords] (default, for Model2)
+    # "frames_first" — [batch, frames, nodes*coords] (for Model3)
+    tensor_format: str = "nodes_first"
 
     # Whether to apply softmax if model output isn't normalized
     apply_softmax: bool = True
@@ -244,7 +266,7 @@ class ModelConfig:
                 )
 
         # Validate landmark source
-        valid_sources = {"mediapipe_hands", "mediapipe_holistic"}
+        valid_sources = {"mediapipe_hands", "mediapipe_holistic", "openpose"}
         if self.input.landmark_source not in valid_sources:
             errors.append(
                 f"Invalid landmark_source: '{self.input.landmark_source}'. "
@@ -260,11 +282,31 @@ class ModelConfig:
             )
 
         # Validate normalization
-        valid_norms = {"min_max", "wrist_relative", "none"}
+        valid_norms = {"min_max", "wrist_relative", "frame", "none"}
         if self.input.normalize not in valid_norms:
             errors.append(
                 f"Invalid normalize: '{self.input.normalize}'. "
                 f"Must be one of: {valid_norms}"
+            )
+
+        # Validate feature extraction mode
+        valid_feature_modes = {"full", "aggregate_3d", "holistic_543x3"}
+        if self.input.feature_mode not in valid_feature_modes:
+            errors.append(
+                f"Invalid feature_mode: '{self.input.feature_mode}'. "
+                f"Must be one of: {valid_feature_modes}"
+            )
+
+        # Validate sequence tensor layout
+        valid_tensor_formats = {
+            "nodes_first",
+            "frames_first",
+            "frames_nodes_coords",
+        }
+        if self.inference.tensor_format not in valid_tensor_formats:
+            errors.append(
+                f"Invalid tensor_format: '{self.inference.tensor_format}'. "
+                f"Must be one of: {valid_tensor_formats}"
             )
 
         if errors:
@@ -286,7 +328,7 @@ class ModelConfig:
     def labels_list(self) -> list[str]:
         """Get labels as a list of strings."""
         if isinstance(self.labels, list):
-            return self.labels
+            return [str(x) for x in self.labels]
         if isinstance(self.labels, str):
             # Check if it's a filename
             if self.labels.endswith(".json") or self.labels.endswith(".txt"):
@@ -296,7 +338,35 @@ class ModelConfig:
                         data = json.load(f)
                     if isinstance(data, list):
                         return [str(x) for x in data]
-                    return list(data.keys()) if isinstance(data, dict) else list(self.labels)
+                    if isinstance(data, dict):
+                        # {"0":"A","1":"B",...}
+                        if all(str(k).isdigit() for k in data.keys()):
+                            return [
+                                str(data[k])
+                                for k in sorted(data.keys(), key=lambda x: int(x))
+                            ]
+
+                        # {"A":0,"B":1,...}
+                        if all(isinstance(v, int) for v in data.values()):
+                            labels = [""] * len(data)
+                            for name, idx in data.items():
+                                if 0 <= idx < len(labels):
+                                    labels[idx] = str(name)
+                            return labels
+
+                        # {"class_map":{"0":"A",...}, ...}
+                        class_map = data.get("class_map")
+                        if isinstance(class_map, dict) and all(
+                            str(k).isdigit() for k in class_map.keys()
+                        ):
+                            return [
+                                str(class_map[k])
+                                for k in sorted(class_map.keys(), key=lambda x: int(x))
+                            ]
+
+                        # Fallback: preserve order of values if possible.
+                        return [str(v) for v in data.values()]
+                    return list(self.labels)
             # It's a character string like "ABCDEF..."
             return list(self.labels)
         return []

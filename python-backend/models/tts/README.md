@@ -19,6 +19,13 @@ sign detection works without it.
    To use a different voice, change the `tts_voice` setting
    in the frontend Settings panel.
 
+### Installed App Path (Windows)
+
+If you installed the desktop app, TTS voices are bundled here:
+`%LOCALAPPDATA%\Programs\EchoLink\resources\backend\_internal\models\tts`
+
+Restart the app after adding or switching voices in the installed build.
+
 ## Recommended Voices
 
 | Voice | Quality | Size | Speed |

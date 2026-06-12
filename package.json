@@ -1,11 +1,21 @@
 {
   "name": "echolink",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "EchoLink ASL to Speech desktop application",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "dev:frontend": "vite",
+    "dev:electron": "wait-on tcp:5173 && electron .",
+    "electron:dev": "concurrently -k \"npm:dev:frontend\" \"npm:dev:electron\"",
     "build": "vite build",
+    "build:frontend": "vite build",
+    "build:backend": "pyinstaller --noconfirm --clean --distpath python-backend/dist --workpath python-backend/build python-backend/echolink-backend.spec",
+    "build:electron": "electron-builder --win nsis",
+    "dist": "npm run build:frontend && npm run build:backend && npm run build:electron",
+    "dist:win": "npm run build:frontend && npm run build:backend && electron-builder --win nsis",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -20,9 +30,50 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.1",
+    "concurrently": "^9.2.1",
+    "electron": "^36.4.0",
+    "electron-builder": "^26.0.12",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "7.2.4",
-    "vite-plugin-singlefile": "2.3.0"
+    "vite-plugin-singlefile": "2.3.0",
+    "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "com.echolink.desktop",
+    "productName": "EchoLink",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "python-backend/dist/echolink-backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    }
   }
 }

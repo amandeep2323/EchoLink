@@ -122,7 +122,7 @@ export function useWebSocket() {
         const timeout = setTimeout(() => {
           ws.close();
           resolve(false);
-        }, 3000); // 3s timeout (was 5s)
+        }, 5000); // 5s timeout (increased from 3s for slower systems)
 
         ws.onopen = () => {
           clearTimeout(timeout);
@@ -161,6 +161,10 @@ export function useWebSocket() {
                 break;
               case 'status_update':
                 setStatus(msg.data as StatusData);
+                if (!msg.data.pipeline_running) {
+                  setFrame(null);
+                  setSignDetection(null);
+                }
                 break;
               case 'device_list':
                 setDevices(msg.data as DeviceList);
@@ -187,10 +191,12 @@ export function useWebSocket() {
           }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
           clearTimeout(timeout);
           if (!mountedRef.current) return;
 
+          console.log(`[WS] Connection closed: code=${event.code}, reason=${event.reason || 'none'}, clean=${event.wasClean}`);
+          
           setConnectionStatus('disconnected');
           // Don't set backendOnline=false here — health poll will determine that
           if (staleTimeoutRef.current) clearTimeout(staleTimeoutRef.current);
@@ -202,13 +208,15 @@ export function useWebSocket() {
               const online = await checkHealth();
               setBackendOnline(online);
               if (online && wsRef.current?.readyState !== WebSocket.OPEN) {
+                console.log('[WS] Backend is back online, reconnecting...');
                 connectWs();
               }
             }, HEALTH_POLL_INTERVAL);
           }
         };
 
-        ws.onerror = () => {
+        ws.onerror = (error) => {
+          console.error('[WS] WebSocket error:', error);
           // onclose fires after this
         };
       } catch {
@@ -222,6 +230,8 @@ export function useWebSocket() {
 
   const restartPipeline = useCallback(
     async (settings: PipelineSettings) => {
+      setFrame(null);
+      setSignDetection(null);
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         sendRaw('restart_pipeline', settings);
         return;
@@ -240,6 +250,8 @@ export function useWebSocket() {
   );
 
   const stopPipeline = useCallback(() => {
+    setFrame(null);
+    setSignDetection(null);
     send('stop_pipeline', null);
   }, [send]);
 

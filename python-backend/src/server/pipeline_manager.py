@@ -38,7 +38,7 @@ TTS_MODEL_DIR = os.path.join(_BACKEND_ROOT, "models", "tts")
 @dataclass
 class PipelineSettings:
     camera_index: int = 0
-    resolution: tuple[int, int] = (640, 480)
+    resolution: tuple[int, int] = (1920, 1080)
     fps: int = 30
     show_landmarks: bool = True
     show_overlay: bool = True
@@ -108,6 +108,11 @@ class PipelineManager:
         # Error tracking
         self._consecutive_errors: int = 0
         self._last_error_msg: str = ""
+
+        # Frame skipping for performance (heavy models like OpenPose)
+        self._recognition_frame_counter: int = 0
+        self._recognition_frame_skip: int = 1  # Process every Nth frame
+        self._last_recognition_result = None  # Cache for skipped frames
 
         # Subsystem instances
         self._camera = None
@@ -260,6 +265,18 @@ class PipelineManager:
         print(f"[Pipeline] Model dir: {SIGN_MODEL_DIR}")
         print(f"[Pipeline] TTS dir:   {TTS_MODEL_DIR}")
         print(f"[Pipeline] Active model: {active_id}")
+
+        # Phase 6: Load model config to get camera resolution and frame skip settings
+        if self._active_config:
+            cam_res = getattr(self._active_config.input, 'camera_resolution', None)
+            if cam_res and len(cam_res) == 2:
+                self._settings.resolution = tuple(cam_res)
+                print(f"[Pipeline] Using model-specific resolution: {self._settings.resolution}")
+            
+            frame_skip = getattr(self._active_config.input, 'recognition_frame_skip', 1)
+            self._recognition_frame_skip = max(1, frame_skip)
+            if self._recognition_frame_skip > 1:
+                print(f"[Pipeline] Recognition frame skip: {self._recognition_frame_skip} (process every {self._recognition_frame_skip} frames)")
 
         await self._init_subsystems()
 
@@ -461,6 +478,21 @@ class PipelineManager:
                 # Update landmarker config (thresholds may have changed)
                 if self._landmarker:
                     self._landmarker.init_from_config(new_config)
+
+                # Update camera resolution if model specifies it
+                cam_res = getattr(new_config.input, 'camera_resolution', None)
+                if cam_res and len(cam_res) == 2:
+                    new_resolution = tuple(cam_res)
+                    if new_resolution != self._settings.resolution:
+                        print(f"[Pipeline] Model requires different resolution: {self._settings.resolution} → {new_resolution}")
+                        self._settings.resolution = new_resolution
+                        self._restart_camera()
+
+                # Update frame skip setting
+                frame_skip = getattr(new_config.input, 'recognition_frame_skip', 1)
+                self._recognition_frame_skip = max(1, frame_skip)
+                if self._recognition_frame_skip > 1:
+                    print(f"[Pipeline] Recognition frame skip: {self._recognition_frame_skip}")
 
                 # Reset TTS word tracking
                 self._last_spoken_word_count = 0
@@ -957,6 +989,11 @@ class PipelineManager:
     def _process_frame(self):
         """
         Single frame processing step (runs in thread pool).
+        
+        Decouples preview rendering from recognition:
+        - Preview is generated every frame for smooth display
+        - Recognition runs every Nth frame (configurable via recognition_frame_skip)
+        - Skipped frames reuse last recognition result for overlay
         """
         import cv2
 
@@ -967,30 +1004,44 @@ class PipelineManager:
         if raw_frame is None:
             return None
 
-        # ── 1. Landmark extraction on raw frame ──
+        # Increment frame counter for skip logic
+        self._recognition_frame_counter += 1
+        should_run_recognition = (self._recognition_frame_counter % self._recognition_frame_skip) == 0
+
+        # ── 1. Landmark extraction + Recognition (only on non-skipped frames) ──
         hands_detected = False
         points = None
         handedness = None
         wrist_pos = None
         recognition_result = None
 
-        if self._landmarker and self._landmarker_ok:
-            success, raw_frame, points, wrist_pos, handedness = (
-                self._landmarker.process(
-                    raw_frame,
-                    draw_landmarks=self._settings.show_landmarks,
+        if should_run_recognition:
+            # Run full recognition pipeline
+            if self._landmarker and self._landmarker_ok:
+                success, raw_frame, points, wrist_pos, handedness = (
+                    self._landmarker.process(
+                        raw_frame,
+                        draw_landmarks=self._settings.show_landmarks,
+                    )
                 )
-            )
-            hands_detected = success
-            self._hands_detected = hands_detected
+                hands_detected = success
+                self._hands_detected = hands_detected
 
-        # ── 2. Recognition ──
-        if self._recognizer and self._recognizer_ok and self._recognizer.is_loaded:
-            recognition_result = self._recognizer.process(
-                points=points,
-                handedness=handedness,
-                hands_detected=hands_detected,
-            )
+            # ── 2. Recognition ──
+            if self._recognizer and self._recognizer_ok and self._recognizer.is_loaded:
+                recognition_result = self._recognizer.process(
+                    points=points,
+                    handedness=handedness,
+                    hands_detected=hands_detected,
+                )
+                # Cache result for skipped frames
+                self._last_recognition_result = recognition_result
+        else:
+            # Skipped frame: reuse last recognition result for overlay
+            recognition_result = self._last_recognition_result
+            if recognition_result:
+                hands_detected = recognition_result.hands_detected
+                self._hands_detected = hands_detected
 
         # Overlay data
         transcript = ""
@@ -1050,7 +1101,9 @@ class PipelineManager:
         from ..camera import CameraCapture
         frame_b64 = CameraCapture.encode_base64(preview_frame, quality=70)
 
-        return (frame_b64, recognition_result)
+        # Only return recognition_result on frames where it was actually computed
+        return_recognition_result = recognition_result if should_run_recognition else None
+        return (frame_b64, return_recognition_result)
 
     # ── Broadcasting Helpers ────────────────────
 

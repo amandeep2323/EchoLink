@@ -43,10 +43,17 @@ class ConnectionManager:
 
     async def send(self, ws: WebSocket, message: str) -> None:
         """Send a message to a single client. Disconnects on failure."""
+        # Check if websocket is still in our active connections
+        async with self._lock:
+            if ws not in self._connections:
+                return  # Already disconnected, skip silently
+        
         try:
             await ws.send_text(message)
         except Exception:
-            await self.disconnect(ws)
+            # Only disconnect if still in our set (avoid double-disconnect)
+            async with self._lock:
+                self._connections.discard(ws)
 
     async def broadcast(self, message: str) -> None:
         """

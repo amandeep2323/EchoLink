@@ -1,0 +1,47 @@
+{
+  "name": "LSTM ASL Recognition (250 Signs)",
+  "model_file": "model.onnx",
+  "version": "1.0",
+  "author": "jamesjbustos",
+  "description": "LSTM-based ASL recognition model recognizing 250 signs with 87% accuracy. Uses MediaPipe Holistic landmarks (pose, hands, face) for temporal sequence classification. Based on github.com/jamesjbustos/sign-language-recognition.",
+  "type": "word_level",
+  "labels": "labels.json",
+
+  "input": {
+    "landmark_source": "mediapipe_holistic",
+    "max_hands": 2,
+    "detection_confidence": 0.6,
+    "tracking_confidence": 0.7,
+    "model_complexity": 0,
+    "input_shape": [30, 543, 3],
+    "use_dimensions": 3,
+    "normalize": "none",
+    "feature_mode": "holistic_543x3"
+  },
+
+  "inference": {
+    "type": "sequence",
+    "confidence_threshold": 0.65,
+    "backend": "onnx",
+    "sequence_length": 30,
+    "stride": 1,
+    "tensor_format": "frames_nodes_coords",
+    "apply_softmax": true
+  },
+
+  "postprocess": {
+    "misrecognition_fixes": false,
+    "spell_correction": false,
+    "stability_frames": 5,
+    "repeat_frames": 25,
+    "max_consecutive": 1,
+    "cooldown_frames": 20,
+    "diff_cooldown_frames": 5,
+    "high_confidence_threshold": 0.75,
+    "high_confidence_frames": 3,
+    "smooth_window": 7,
+    "min_smooth_confidence": 0.60,
+    "word_timeout": 2.0,
+    "sentence_timeout": 4.0
+  }
+}

@@ -521,19 +521,56 @@ class Recognizer:
 
             # Append frame to sequence buffer
             frame_points = np.array(points, dtype=np.float32)
+            
+            # Handle different point formats
             if frame_points.ndim == 1:
-                frame_points = frame_points.reshape(-1, 2)
+                # Already flat (e.g., aggregate_3d mode: [3])
+                pass
+            elif frame_points.ndim == 2:
+                # 2D array (e.g., [55, 2] or [1, 3])
+                if frame_points.shape[0] == 1:
+                    # Squeeze batch dimension: [1, 3] -> [3]
+                    frame_points = frame_points.squeeze(0)
+                # else keep as is for normal keypoint format [55, 2]
+            
             self._sequence_buffer.append(frame_points)
 
             # Only classify when buffer is full
             if len(self._sequence_buffer) == seq_len:
-                # Build tensor: stack frames, then flatten x,y per node
+                # Build tensor based on model's tensor_format
                 stacked = np.stack(list(self._sequence_buffer), axis=0)
-                num_nodes = stacked.shape[1]
-                tensor = stacked.transpose(1, 0, 2).reshape(
-                    num_nodes, seq_len * 2
+                tensor_format = (
+                    getattr(self._config.inference, "tensor_format", "nodes_first")
+                    if self._config
+                    else "nodes_first"
                 )
-                tensor = np.expand_dims(tensor, axis=0).astype(np.float32)
+                
+                # Check if we're using aggregate features (1D per frame) or keypoints (2D per frame)
+                if stacked.ndim == 2:
+                    # Aggregate features: stacked shape is [frames, features]
+                    # e.g., [543, 3] for Model3
+                    tensor = np.expand_dims(stacked, axis=0).astype(np.float32)
+                else:
+                    # Normal keypoints: stacked shape is [frames, nodes, coords]
+                    num_nodes = stacked.shape[1]
+                    num_coords = stacked.shape[2]
+
+                    if tensor_format == "frames_nodes_coords":
+                        # Format: [frames, nodes, coords] (raw sequence, no batch dim)
+                        # Used by Model3 ONNX exported from TFLite signature.
+                        tensor = stacked.astype(np.float32)
+                    elif tensor_format == "frames_first":
+                        # Format: [batch, frames, nodes*coords]
+                        # stacked shape: [frames, nodes, coords]
+                        tensor = stacked.reshape(seq_len, num_nodes * num_coords)
+                        tensor = np.expand_dims(tensor, axis=0).astype(np.float32)
+                    else:
+                        # Format: [batch, nodes, frames*coords] (default, for Model2)
+                        # stacked shape: [frames, nodes, coords]
+                        tensor = stacked.transpose(1, 0, 2).reshape(
+                            num_nodes, seq_len * num_coords
+                        )
+                        tensor = np.expand_dims(tensor, axis=0).astype(np.float32)
 
                 # Classify
                 word, confidence, top_3 = self._classify_raw(tensor)

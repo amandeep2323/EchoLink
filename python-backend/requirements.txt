@@ -19,8 +19,13 @@ numpy>=1.24,<2.0
 sounddevice==0.5.1
 
 # ── ML Inference ──
-# ONNX Runtime — primary inference engine for .onnx models
-onnxruntime==1.22.0
+# Intel OpenVINO Runtime — primary inference engine for Models 1 & 2
+# Provides Intel CPU optimizations and model caching for improved performance
+openvino>=2024.0.0
+
+# ONNX Runtime — fallback inference engine for Model 3
+# Required for Model 3 due to Loop operator incompatibility with OpenVINO
+onnxruntime>=1.22.0
 # For GPU: pip install onnxruntime-gpu instead
 
 # ── Virtual Camera ──
@@ -28,7 +33,19 @@ onnxruntime==1.22.0
 pyvirtualcam==0.12.0
 
 # ── Text-to-Speech ──
-# Primary: Piper TTS (natural voice, requires model files)
+# Primary: Intel OPEA SpeechT5 (OpenVINO-accelerated, natural voice)
+transformers>=4.30.0
+sentencepiece>=0.1.99
+torch>=2.0.0
+datasets>=2.14.0
+# OpenVINO IR acceleration for SpeechT5 (optional but recommended).
+# Enables running the converted OpenVINO IR (models/tts/speecht5_openvino/)
+# produced by convert_tts_model.py. Without it, OPEA TTS uses the PyTorch path.
+optimum-intel[openvino]>=1.21.0
+# Optional: OpenVINO Runtime for hardware acceleration (Intel CPUs/GPUs)
+# Install for 30-40% faster synthesis: pip install openvino>=2023.0.0
+# openvino>=2023.0.0
+# Secondary: Piper TTS (natural voice, requires model files)
 piper-tts
 # Fallback: pyttsx3 (uses Windows SAPI / system voice, no models needed)
 pyttsx3==2.98

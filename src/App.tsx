@@ -107,6 +107,21 @@ export function App() {
     prevBackendRef.current = backendOnline;
   }, [backendOnline, addToast]);
 
+  // ── Sync persisted settings to backend on connect ──
+  // The backend auto-starts the pipeline with its own defaults, so we push the
+  // frontend's persisted settings (e.g. TTS enabled) once the backend is online.
+  // This ensures toggles like TTS auto-load without the user re-toggling them.
+  const syncedSettingsRef = useRef(false);
+  useEffect(() => {
+    if (backendOnline && !syncedSettingsRef.current) {
+      syncedSettingsRef.current = true;
+      updateRemoteSettings(settings);
+    }
+    if (!backendOnline) {
+      syncedSettingsRef.current = false;
+    }
+  }, [backendOnline, settings, updateRemoteSettings]);
+
   // ── Session duration timer ──
   useEffect(() => {
     if (!sessionStart) {
@@ -123,7 +138,7 @@ export function App() {
   const handleRestart = useCallback(() => {
     setPipelineLoading(true);
     restartPipeline(settings);
-    setTimeout(() => setPipelineLoading(false), 15000);
+    setTimeout(() => setPipelineLoading(false), 60000);
   }, [restartPipeline, settings]);
 
   const handleStop = useCallback(() => {
@@ -262,6 +277,12 @@ export function App() {
 
   // Determine loading state: pipeline was requested but no frames yet
   const isLoading = pipelineLoading && !frame;
+
+  useEffect(() => {
+    if (frame || !status.pipeline_running) {
+      setPipelineLoading(false);
+    }
+  }, [frame, status.pipeline_running]);
 
   // Word count from transcript
   const fullText = [transcript.full_text, transcript.latest_word].filter(Boolean).join(' ').trim();

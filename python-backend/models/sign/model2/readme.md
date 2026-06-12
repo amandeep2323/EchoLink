@@ -10,8 +10,8 @@
 | Input | `(1, 55, 100)` — 55 keypoints × 50 frames × 2 (x,y) |
 | Output | `(1, 2000)` — 2000 ASL words |
 | Inference | `sequence` — 50-frame rolling buffer |
-| Landmarks | `mediapipe_holistic` — 55 upper-body keypoints |
-| Normalization | `none` — raw coordinates |
+| Landmarks | `openpose` — 55 upper-body keypoints (BODY_25 + hands) |
+| Normalization | `frame` — normalized by frame width/height (0-1 range) |
 
 ## Files
 
@@ -26,7 +26,7 @@ model2/
 ## Pipeline Behavior
 
 When this model is active, `model.json` drives the pipeline to:
-- Use **MediaPipe Holistic** for landmark extraction (55 points)
+- Use **OpenPose** for landmark extraction (55 points)
 - Extract **13 upper-body/face** + **21 left-hand** + **21 right-hand** keypoints per frame
 - Buffer **50 frames** into a rolling `deque`
 - Format the buffer into a tensor of shape `[1, 55, 100]` (55 nodes × 50 frames × 2 coords)
@@ -42,10 +42,25 @@ When this model is active, `model.json` drives the pipeline to:
 | 0–10 | 11 | Pose landmarks | Nose, shoulders, elbows, wrists, eyes, ears |
 | 11 | 1 | Computed | Neck (midpoint of shoulders) |
 | 12 | 1 | Computed | Mid-hip (midpoint of hips) |
-| 13–33 | 21 | Left hand | All 21 MediaPipe hand landmarks |
-| 34–54 | 21 | Right hand | All 21 MediaPipe hand landmarks |
+| 13–33 | 21 | Left hand | All 21 OpenPose hand keypoints |
+| 34–54 | 21 | Right hand | All 21 OpenPose hand keypoints |
 
 Hands are zero-padded when not visible.
+
+## OpenPose Setup (Required)
+
+This model expects OpenPose keypoints. Install OpenPose and set:
+
+```
+OPENPOSE_DIR=C:\path\to\openpose
+```
+
+The folder must contain:
+- `python/` (OpenPose Python bindings)
+- `models/` (OpenPose model files)
+- `bin/` (Windows DLLs)
+
+You can also set `input.openpose_model_folder` in `model.json` if your models are elsewhere.
 
 ## Credits
 

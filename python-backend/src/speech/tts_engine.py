@@ -1,14 +1,16 @@
 """
-TTS Engine — Text-to-Speech with pyttsx3 (Windows) + Piper fallback
-====================================================================
+TTS Engine — Text-to-Speech with Intel OPEA SpeechT5 + Piper + pyttsx3
+========================================================================
 Converts text into audio numpy arrays.
+
+Backend Priority:
+  1. Intel OPEA SpeechT5 (OpenVINO-accelerated, offline, natural voice)
+  2. Piper (offline, natural voice)
+  3. pyttsx3 (Windows SAPI voices, fallback)
 
 Two audio outputs:
   1. VMic callback  → sends audio to virtual microphone (for Meet/Zoom)
   2. Local playback → plays audio through system speakers (for user to hear)
-
-On Windows: Uses pyttsx3 (Windows SAPI voices) — works out of the box.
-On Linux:   Uses Piper TTS (offline, natural voice) if piper_phonemize available.
 
 IMPORTANT: pyttsx3 is NOT thread-safe across threads.
   - Engine must be created AND used on the SAME thread.
@@ -81,14 +83,17 @@ class TTSEngine:
     DEFAULT_VOICE = "en_US-lessac-medium"
     SAMPLE_RATE = 22050
 
-    def __init__(self, model_dir: str = ""):
+    def __init__(self, model_dir: str = "", backend: str = "auto"):
         self._model_dir = model_dir
         self._sample_rate = self.SAMPLE_RATE
         self._loaded = False
+        self._requested_backend = backend  # "auto", "speecht5", "piper", "pyttsx3"
 
         # Backend state
-        self._backend = ""  # "pyttsx3" or "piper"
+        self._backend = ""  # "opea", "speecht5", "piper", or "pyttsx3"
         self._voice = None  # Piper voice object (if using piper)
+        self._speecht5 = None  # SpeechT5 synthesizer (if using speecht5)
+        self._opea = None  # OPEA TTS synthesizer (if using opea)
         self._voice_name = ""
 
         # Threading
@@ -121,26 +126,71 @@ class TTSEngine:
         return self._voice_name
 
     @property
+    def backend_name(self) -> str:
+        """Return the current active backend name."""
+        return self._backend
+
+    @property
     def has_callback(self) -> bool:
         with self._callback_lock:
             return self._callback is not None
 
     # ── Loading ─────────────────────────────────
 
-    def load(self, voice_name: Optional[str] = None) -> None:
+    def load(self, voice_name: Optional[str] = None, backend: Optional[str] = None) -> None:
         """
         Load TTS backend.
-        On Windows: tries pyttsx3 first (always works).
-        On Linux:   tries Piper first (needs piper_phonemize).
+        
+        Backend Priority (when backend="auto"):
+          1. Intel OPEA SpeechT5 (OpenVINO-accelerated)
+          2. Piper (offline, natural voice)
+          3. pyttsx3 (system voices, fallback)
+        
+        Args:
+            voice_name: Voice model name (for Piper)
+            backend: "auto", "opea", "speecht5", "piper", or "pyttsx3"
         """
         voice_name = voice_name or self.DEFAULT_VOICE
+        backend = backend or self._requested_backend
 
-        if sys.platform == "win32":
-            if self._try_pyttsx3():
+        # Try backends in priority order based on request
+        if backend == "opea":
+            # Force OPEA only
+            if self._try_opea():
                 return
+            print("[TTS] ✗ OPEA not available — no fallback with explicit backend selection")
+        
+        elif backend == "speecht5":
+            # Force SpeechT5 only
+            if self._try_speecht5():
+                return
+            print("[TTS] ✗ SpeechT5 not available — no fallback with explicit backend selection")
+            
+        elif backend == "piper":
+            # Force Piper only
             if self._try_piper(voice_name):
                 return
+            print("[TTS] ✗ Piper not available — no fallback with explicit backend selection")
+            
+        elif backend == "pyttsx3":
+            # Force pyttsx3 only
+            if self._try_pyttsx3():
+                return
+            print("[TTS] ✗ pyttsx3 not available")
+            
         else:
+            # Auto mode: try in priority order
+            # Check for OpenVINO availability to prioritize OPEA
+            from .opea_tts.backend_detector import check_openvino_available
+            
+            if check_openvino_available():
+                # OpenVINO detected — prioritize OPEA
+                if self._try_opea():
+                    return
+            
+            # Fall back to existing backends
+            if self._try_speecht5():
+                return
             if self._try_piper(voice_name):
                 return
             if self._try_pyttsx3():
@@ -148,8 +198,79 @@ class TTSEngine:
 
         self._loaded = False
         print("[TTS] ✗ No TTS backend available!")
-        print("[TTS]   Windows: pip install pyttsx3")
-        print("[TTS]   Linux:   pip install piper-tts piper-phonemize")
+        print("[TTS]   OPEA TTS: pip install transformers torch sentencepiece openvino")
+        print("[TTS]   SpeechT5: pip install openvino transformers sentencepiece")
+        print("[TTS]   Piper:    pip install piper-tts piper-phonemize")
+        print("[TTS]   pyttsx3:  pip install pyttsx3")
+
+    def _try_opea(self) -> bool:
+        """Try to load Intel OPEA TTS."""
+        print("[TTS] Testing Intel OPEA (SpeechT5 + OpenVINO)...")
+        try:
+            from .opea_tts import OpeaTtsSynthesizer
+            
+            opea_dir = os.path.join(self._model_dir, "opea_speecht5")
+            synthesizer = OpeaTtsSynthesizer(model_dir=opea_dir)
+            
+            if synthesizer.load():
+                self._opea = synthesizer
+                self._sample_rate = synthesizer.sample_rate
+                self._backend = "opea"
+                self._loaded = True
+                self._voice_name = f"Intel OPEA ({synthesizer.backend_name})"
+                print(f"[TTS] ✓ Backend: Intel OPEA — rate: {self._sample_rate}Hz")
+                print(f"[TTS]   Runtime: {synthesizer.backend_name}")
+                return True
+            else:
+                print("[TTS]   OPEA load failed")
+                return False
+                
+        except ImportError as e:
+            print(f"[TTS]   OPEA not installed: {e}")
+            print("[TTS]   Install: pip install transformers torch sentencepiece")
+        except Exception as e:
+            print(f"[TTS]   OPEA test failed: {e}")
+            traceback.print_exc()
+
+        return False
+
+
+    def _try_speecht5(self) -> bool:
+        """Try to load Intel OPEA SpeechT5 with OpenVINO."""
+        print("[TTS] Testing SpeechT5 (Intel OPEA + OpenVINO)...")
+        try:
+            from .speecht5_backend import SpeechT5Synthesizer
+
+            speecht5_dir = os.path.join(self._model_dir, "speecht5")
+            synthesizer = SpeechT5Synthesizer(model_dir=speecht5_dir)
+            
+            if synthesizer.load():
+                # Test synthesis
+                test_audio = synthesizer.synthesize("test", return_numpy=True)
+                if test_audio is not None and len(test_audio) > 100:
+                    self._speecht5 = synthesizer
+                    self._sample_rate = synthesizer.sample_rate
+                    self._backend = "speecht5"
+                    self._loaded = True
+                    self._voice_name = "SpeechT5"
+                    print(f"[TTS] ✓ Backend: SpeechT5 (Intel OPEA + OpenVINO) — rate: {self._sample_rate}Hz")
+                    print(f"[TTS]   Test synthesis: {len(test_audio)} samples")
+                    return True
+                else:
+                    print("[TTS]   SpeechT5 test synthesis failed")
+                    return False
+            else:
+                print("[TTS]   SpeechT5 load failed")
+                return False
+                
+        except ImportError as e:
+            print(f"[TTS]   SpeechT5 not installed: {e}")
+            print("[TTS]   Install: pip install openvino transformers sentencepiece")
+        except Exception as e:
+            print(f"[TTS]   SpeechT5 test failed: {e}")
+            traceback.print_exc()
+
+        return False
 
     def _try_pyttsx3(self) -> bool:
         """Test pyttsx3 on the CURRENT thread."""
@@ -393,7 +514,7 @@ class TTSEngine:
         self._running = True
         self._thread = threading.Thread(target=self._synthesis_loop, daemon=True)
         self._thread.start()
-        print("[TTS] Synthesis thread started")
+        print(f"[TTS] Synthesis thread started (backend: {self._backend})")
 
     def stop(self) -> None:
         if not self._running:
@@ -438,7 +559,7 @@ class TTSEngine:
 
         CRITICAL: pyttsx3 engine must be created HERE (same thread as runAndWait).
         """
-        # Create pyttsx3 engine on THIS thread
+        # Create pyttsx3 engine on THIS thread (if using pyttsx3)
         thread_engine = None
         if self._backend == "pyttsx3":
             try:
@@ -473,7 +594,11 @@ class TTSEngine:
             # Synthesize
             audio = None
             try:
-                if self._backend == "pyttsx3" and thread_engine:
+                if self._backend == "opea" and self._opea:
+                    audio = self._do_opea_synth(spoken_text)
+                elif self._backend == "speecht5" and self._speecht5:
+                    audio = self._do_speecht5_synth(spoken_text)
+                elif self._backend == "pyttsx3" and thread_engine:
                     audio = self._do_pyttsx3_synth(thread_engine, spoken_text)
                 elif self._backend == "piper" and self._voice:
                     audio = self._do_piper_synth(spoken_text)
@@ -485,7 +610,7 @@ class TTSEngine:
             if audio is not None and len(audio) > 0:
                 total_spoken += 1
                 print(
-                    f"[TTS] ✓ Synthesized '{text}' — "
+                    f"[TTS] ✓ Synthesized '{text}' ({self._backend}) — "
                     f"{len(audio)} samples ({len(audio)/self._sample_rate:.2f}s)"
                 )
 
@@ -512,6 +637,34 @@ class TTSEngine:
                 pass
 
         print(f"[TTS] Synthesis thread exiting — spoke {total_spoken} utterances")
+
+    # ── OPEA TTS Synthesis (called on synthesis thread) ──
+
+    def _do_opea_synth(self, text: str) -> Optional[np.ndarray]:
+        """Synthesize using Intel OPEA TTS."""
+        try:
+            audio = self._opea.synthesize(text, voice="default")
+            if audio is not None and len(audio) > 0:
+                return audio
+            return None
+        except Exception as e:
+            print(f"[TTS]   OPEA synth error: {e}")
+            traceback.print_exc()
+            return None
+
+    # ── SpeechT5 Synthesis (called on synthesis thread) ──
+
+    def _do_speecht5_synth(self, text: str) -> Optional[np.ndarray]:
+        """Synthesize using Intel OPEA SpeechT5."""
+        try:
+            audio = self._speecht5.synthesize(text, return_numpy=True)
+            if audio is not None and len(audio) > 0:
+                return audio
+            return None
+        except Exception as e:
+            print(f"[TTS]   SpeechT5 synth error: {e}")
+            traceback.print_exc()
+            return None
 
     # ── pyttsx3 Synthesis (called on synthesis thread) ──
 
@@ -631,6 +784,8 @@ class TTSEngine:
     def shutdown(self) -> None:
         self.stop()
         self._voice = None
+        self._speecht5 = None
+        self._opea = None
         self._loaded = False
         self._backend = ""
         with self._callback_lock:

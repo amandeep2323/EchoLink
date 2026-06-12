@@ -73,6 +73,15 @@ def create_websocket_route(
 
         except WebSocketDisconnect:
             pass  # Normal disconnection
+        except RuntimeError as e:
+            # Benign race: client closed while we were in the receive loop or
+            # just after a broadcast cleaned up the socket. Starlette raises
+            # this instead of WebSocketDisconnect in that case.
+            msg = str(e).lower()
+            if "accept" in msg or "disconnect" in msg or "close" in msg:
+                pass  # Already disconnected — ignore
+            else:
+                print(f"[WS] Unexpected connection error: {e}")
         except Exception as e:
             print(f"[WS] Unexpected connection error: {e}")
         finally:

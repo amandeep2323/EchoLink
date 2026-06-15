@@ -1,69 +1,57 @@
-# Model 2 — WLASL Pose-TGCN (2000 Words)
+# Model 2 — SignBart WLASL (1000 Words)
 
-## Overview
+Word-level American Sign Language recognition using **SignBart**, a lightweight
+(~4.4M param) BART-style encoder–decoder that operates on MediaPipe Holistic
+skeleton sequences. It decouples the x and y coordinates (x → encoder,
+y → decoder) and fuses them with cross-attention.
 
-| Property | Value |
-|----------|-------|
-| Name | WLASL Pose-TGCN (2000 Words) |
-| Architecture | Multi-Attention Spatial-Temporal Graph Convolutional Network |
-| Source | [dxli94/WLASL](https://github.com/dxli94/WLASL) |
-| Input | `(1, 55, 100)` — 55 keypoints × 50 frames × 2 (x,y) |
-| Output | `(1, 2000)` — 2000 ASL words |
-| Inference | `sequence` — 50-frame rolling buffer |
-| Landmarks | `openpose` — 55 upper-body keypoints (BODY_25 + hands) |
-| Normalization | `frame` — normalized by frame width/height (0-1 range) |
+This replaces the previous OpenPose-based WLASL Pose-TGCN model, which was
+CPU-heavy (~91% CPU, 1–2 FPS). SignBart runs on MediaPipe Holistic (no OpenPose
+dependency) and is far lighter.
+
+- **Paper / source**: https://github.com/TinhNguyen2312/SignBart (arXiv 2506.21592)
+- **Pretrained weights**: WLASL-1000 (`WLASL-1000.pth`) from
+  https://www.kaggle.com/models/nguyenchitinh/signbart
+- **Classes**: 1000 WLASL words (`labels.json`)
 
 ## Files
 
-```
-model2/
-├── model.json              ← Configuration (pipeline settings, thresholds)
-├── wlasl_pose_tgcn.onnx    ← Model weights (converted from PyTorch)
-├── labels.json             ← 2000-word label map (integer → English word)
-└── readme.md               ← This file
-```
+| File | Purpose |
+|------|---------|
+| `signbart_wlasl1000.onnx` | Exported SignBart model (dual input: keypoints + attention_mask) |
+| `labels.json` | Ordered list of 1000 WLASL gloss words |
+| `model.json` | EchoLink model configuration |
 
-## Pipeline Behavior
+## How it works in EchoLink
 
-When this model is active, `model.json` drives the pipeline to:
-- Use **OpenPose** for landmark extraction (55 points)
-- Extract **13 upper-body/face** + **21 left-hand** + **21 right-hand** keypoints per frame
-- Buffer **50 frames** into a rolling `deque`
-- Format the buffer into a tensor of shape `[1, 55, 100]` (55 nodes × 50 frames × 2 coords)
-- Classify the full sequence via ONNX Runtime
-- Apply **confidence smoothing** (no letter accumulation or spell correction)
-- Emit the predicted **full word** directly when smoothed confidence exceeds threshold
-- **Clear the buffer** after emission to prevent stutter-repeating
+1. **Landmarks** — `landmark_source: mediapipe_holistic`, `feature_mode: signbart_holistic75`.
+   The landmarker emits a `(75, 2)` array per frame: 33 pose + 21 left-hand +
+   21 right-hand keypoints (x, y), zero-filled where a part is missing.
+2. **Buffering** — the recognizer buffers `sequence_length` (48) frames.
+3. **Normalization** — per-part bounding-box normalization (body / left hand /
+   right hand) is applied in `recognizer._build_signbart_tensor`, exactly
+   matching SignBart's training `dataset.py`.
+4. **Inference** — `backend: signbart` in `model_loader.py` runs the dual-input
+   ONNX via ONNX Runtime: `keypoints (1,T,75,2)` + `attention_mask (1,T)` →
+   `logits (1,1000)` → softmax → top-k → word.
 
-## 55-Point Keypoint Layout
+## Regenerating the ONNX
 
-| Index Range | Count | Source | Description |
-|-------------|-------|--------|-------------|
-| 0–10 | 11 | Pose landmarks | Nose, shoulders, elbows, wrists, eyes, ears |
-| 11 | 1 | Computed | Neck (midpoint of shoulders) |
-| 12 | 1 | Computed | Mid-hip (midpoint of hips) |
-| 13–33 | 21 | Left hand | All 21 OpenPose hand keypoints |
-| 34–54 | 21 | Right hand | All 21 OpenPose hand keypoints |
-
-Hands are zero-padded when not visible.
-
-## OpenPose Setup (Required)
-
-This model expects OpenPose keypoints. Install OpenPose and set:
+From `SignBart-main/` (with its venv):
 
 ```
-OPENPOSE_DIR=C:\path\to\openpose
+venv\Scripts\python.exe export_signbart_onnx.py ^
+    --config configs/WLASL-1000.yaml ^
+    --weights pretrained_models/WLASL-1000.pth ^
+    --out signbart_wlasl1000.onnx
 ```
 
-The folder must contain:
-- `python/` (OpenPose Python bindings)
-- `models/` (OpenPose model files)
-- `bin/` (Windows DLLs)
+Then copy `signbart_wlasl1000.onnx` and `labels_wlasl/labels_list.json`
+(as `labels.json`) into this folder.
 
-You can also set `input.openpose_model_folder` in `model.json` if your models are elsewhere.
+## Label ordering note
 
-## Credits
-
-- **Original Paper**: *Word-level Deep Sign Language Recognition from Video: A New Large-scale Dataset and Methods Comparison* (WACV 2020)
-- **Authors**: Dongxu Li, Cristian Rodriguez, Xin Yu, Hongdong Li
-- **Repository**: [dxli94/WLASL](https://github.com/dxli94/WLASL)
+`labels.json` is the first 1000 glosses of `WLASL_v0.3.json` in file order — the
+standard WLASL subset convention. If live predictions map to the wrong words,
+the label ordering used during training differs and this file must be
+regenerated to match.

@@ -202,13 +202,12 @@ User has model file
 
 ### `src/recognition/` — Recognition Pipeline
 
-#### `landmarker.py` — MediaPipe/OpenPose Landmark Extraction
-- **Config-driven**: Switches between `mediapipe_hands`, `mediapipe_holistic`, or `openpose` based on `model.json`
+#### `landmarker.py` — MediaPipe Landmark Extraction
+- **Config-driven**: Switches between `mediapipe_hands` and `mediapipe_holistic` based on `model.json`
 - **Hands mode**: Single hand, 21 landmarks × (x, y, z) for fingerspelling models
-- **Holistic mode**: 55 upper-body keypoints (13 pose + 21 left hand + 21 right hand) for word-level models
-- **OpenPose mode**: BODY_25 + hands mapped to the 55-point WLASL layout
+- **Holistic mode**: feature modes — 55-pt WLASL, `signbart_holistic75` (33 pose + 21 + 21 hands), or `holistic_543x3` (full)
 - **Normalization**: Min-max, wrist-relative, frame, or none (configurable)
-- **Drawing**: Pose skeleton, hand connections, or OpenPose keypoints rendered on frame
+- **Drawing**: Pose skeleton + hand connections rendered on frame
 
 #### `recognizer.py` — Sign Classification + Post-Processing
 - **Dual inference modes**:
@@ -228,14 +227,14 @@ User has model file
 
 The pipeline adapts automatically based on each model's `model.json` configuration:
 
-| Property | Model 1 (PointNet) | Model 2 (WLASL) | Model 3 (LSTM) |
+| Property | Model 1 (PointNet) | Model 2 (SignBart) | Model 3 (LSTM) |
 |----------|-------------------|------------------|----------------|
 | **Type** | Fingerspelling | Word-level | Word-level |
-| **Landmarks** | MediaPipe Hands (21 pts) | OpenPose (55 pts) | MediaPipe Holistic (543 pts) |
-| **Inference** | Single frame | 50-frame sequence | 30-frame sequence |
-| **Input Shape** | `[1, 21, 3]` | `[1, 55, 100]` | `[30, 543, 3]` |
-| **Output** | 24 letters (A-Y) | 2000 words | 250 signs |
-| **Runtime** | OpenVINO IR | OpenVINO IR | ONNX Runtime |
+| **Landmarks** | MediaPipe Hands (21 pts) | MediaPipe Holistic (75 pts) | MediaPipe Holistic (543 pts) |
+| **Inference** | Single frame | 48-frame sequence | 30-frame sequence |
+| **Input Shape** | `[1, 21, 3]` | `[1, T, 75, 2]` | `[30, 543, 3]` |
+| **Output** | 24 letters (A-Y) | 1000 words | 250 signs |
+| **Runtime** | OpenVINO IR | SignBart (ONNX, dual-input) | ONNX Runtime |
 | **Post-Processing** | Misrecognition fixes + spell correction | Confidence smoothing only | Confidence smoothing only |
 
 ## Prerequisites
@@ -244,13 +243,11 @@ The pipeline adapts automatically based on each model's `model.json` configurati
 - **OBS Studio** — Virtual camera driver ([download](https://obsproject.com/))
 - **VB-Audio Virtual Cable** — Virtual mic device ([download](https://vb-audio.com/Cable/))
 
-### Optional: OpenPose (for Model 2)
+### Optional: OpenPose
 
-Model2 expects OpenPose keypoints. Install OpenPose and set `OPENPOSE_DIR` so the
-backend can load the Python bindings and model files.
-
-> **Note**: OpenPose is CPU-intensive. A replacement using Intel OpenVINO Human Pose
-> Estimation is planned — see `.kiro/model2plan.md`.
+> **Removed.** Model 2 previously used OpenPose; it is now **SignBart** running on
+> MediaPipe Holistic. OpenPose binaries, the worker process, and the `tools/openpose`
+> folder have been removed. No OpenPose installation is required.
 
 ### Required Models
 - **Sign language model** (`.h5`, `.keras`, `.tflite`, or `.onnx`) in `src/models/`

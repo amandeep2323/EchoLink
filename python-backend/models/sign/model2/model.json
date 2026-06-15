@@ -1,67 +1,50 @@
 {
-  "name": "WLASL Pose-TGCN (2000 Words)",
-  "model_file": "wlasl_pose_tgcn.onnx",
+  "name": "SignBart WLASL (1000 Words)",
+  "model_file": "signbart_wlasl1000.xml",
   "version": "1.0",
-  "author": "dxli94",
-  "description": "Word-level sign language recognition using 55 upper-body keypoints via OpenPose (BODY_25 + hands).",
+  "author": "TinhNguyen2312 (SignBart)",
+  "description": "Word-level ASL recognition using SignBart, a lightweight BART-style encoder-decoder over MediaPipe Holistic skeleton sequences (33 pose + 21 left hand + 21 right hand). Decouples x/y coordinates with cross-attention. Recognizes 1000 WLASL words. Replaces the previous OpenPose Pose-TGCN model.",
   "type": "word_level",
   "labels": "labels.json",
 
   "input": {
-    "landmark_source": "openpose",
+    "landmark_source": "mediapipe_holistic",
     "max_hands": 2,
-    "detection_confidence": 0.6,
-    "tracking_confidence": 0.7,
-    "model_complexity": 0,
-
-    "openpose_model_folder": "",
-    "openpose_net_resolution": "-1x256",
-    "openpose_hand": true,
-    "openpose_face": false,
+    "detection_confidence": 0.5,
+    "tracking_confidence": 0.5,
+    "model_complexity": 1,
 
     "camera_resolution": [640, 480],
     "recognition_frame_skip": 2,
 
-    "input_shape": [1, 55, 100],
+    "input_shape": [1, 48, 75, 2],
 
     "use_dimensions": 2,
-
-    "normalize": "frame"
+    "normalize": "none",
+    "feature_mode": "signbart_holistic75"
   },
 
   "inference": {
     "type": "sequence",
-
-    "confidence_threshold": 0.65,
-
-    "backend": "onnx",
-
-    "sequence_length": 50,
-    "stride": 2,
-
+    "confidence_threshold": 0.30,
+    "backend": "signbart",
+    "sequence_length": 48,
+    "stride": 1,
     "apply_softmax": true
   },
 
   "postprocess": {
     "misrecognition_fixes": false,
     "spell_correction": false,
-
     "stability_frames": 5,
-
     "repeat_frames": 30,
-
     "max_consecutive": 1,
-
     "cooldown_frames": 25,
     "diff_cooldown_frames": 5,
-
-    "high_confidence_threshold": 0.80,
+    "high_confidence_threshold": 0.60,
     "high_confidence_frames": 2,
-
-    "smooth_window": 9,
-
-    "min_smooth_confidence": 0.60,
-
+    "smooth_window": 5,
+    "min_smooth_confidence": 0.35,
     "word_timeout": 2.0,
     "sentence_timeout": 4.0
   }

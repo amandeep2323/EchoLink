@@ -290,7 +290,7 @@ class ModelConfig:
             )
 
         # Validate feature extraction mode
-        valid_feature_modes = {"full", "aggregate_3d", "holistic_543x3"}
+        valid_feature_modes = {"full", "aggregate_3d", "holistic_543x3", "signbart_holistic75", "asl_citizen_86"}
         if self.input.feature_mode not in valid_feature_modes:
             errors.append(
                 f"Invalid feature_mode: '{self.input.feature_mode}'. "

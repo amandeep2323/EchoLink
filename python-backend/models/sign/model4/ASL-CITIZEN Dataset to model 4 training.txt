@@ -1,0 +1,124 @@
+import numpy as np
+import json
+import re
+import shutil
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import GRU, Dense, Dropout
+from tensorflow.keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
+from sklearn.metrics import accuracy_score, f1_score
+
+# ==========================================
+# 1. CLEAN FULL-DATA LOADER
+# ==========================================
+def data_loader_full(data_dir, gloss_to_index_dir, merge_test_to_train=False):
+    print("📥 Loading Full 2731-Class Dataset...")
+    X_train = np.load(f"{data_dir}/x_train.npy")
+    y_train = np.load(f"{data_dir}/y_train.npy")
+
+    X_test = np.load(f"{data_dir}/x_test.npy")
+    y_test = np.load(f"{data_dir}/y_test.npy")
+
+    X_val = np.load(f"{data_dir}/x_val.npy")
+    y_val = np.load(f"{data_dir}/y_val.npy")
+
+    # Reshape for GRU: (samples, timesteps, features)
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], -1)
+    X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], -1)
+    X_val = X_val.reshape(X_val.shape[0], X_val.shape[1], -1)
+
+    # Convert one-hot encoded arrays back to single integers (0 to 2730)
+    y_train = np.argmax(y_train, axis=1)
+    y_val   = np.argmax(y_val, axis=1)
+    y_test  = np.argmax(y_test, axis=1)
+
+    # Build the Decoder (Index -> Normalized Gloss)
+    with open(gloss_to_index_dir) as f:
+        gloss_to_index = json.load(f)
+
+    def normalize_gloss(gloss):
+        """Strips numbers and spaces so 'APPLE1' and 'APPLE2' both output 'APPLE'"""
+        return re.sub(r'\d+', '', gloss).replace(" ", "").upper()
+
+    # The model will output 2731 unique classes, but variants will map to the same base word
+    decoder = {idx: normalize_gloss(gloss) for gloss, idx in gloss_to_index.items()}
+
+    if merge_test_to_train:
+        X_train = np.concatenate([X_train, X_test], axis=0)
+        y_train = np.concatenate([y_train, y_test], axis=0)
+        X_test, y_test = np.array([]), np.array([])
+        print("🔄 Test data merged into Training data.")
+
+    print(f"📊 Final Training Shape : {X_train.shape}")
+    print(f"📊 Total Unique Classes : {len(set(y_train))}")
+    return (X_train, y_train), (X_val, y_val), (X_test, y_test), decoder
+
+# ==========================================
+# 2. EXPANDED GRU ARCHITECTURE
+# ==========================================
+def train_gru_model_full(X_train, y_train, X_val, y_val, 
+                         save_path='best_model_2731.keras', batch_size=64, epochs=150):
+    
+    input_shape = (X_train.shape[1], X_train.shape[2])
+    num_classes = 2731 
+
+    # We increase the units from (386, 192) to (512, 256) to handle the 13x larger vocabulary
+    model = Sequential([
+        GRU(512, return_sequences=True, input_shape=input_shape),
+        Dropout(0.4),
+        GRU(256, return_sequences=False),
+        Dropout(0.4),
+        Dense(num_classes, activation='softmax')
+    ])
+
+    model.compile(optimizer='Adam',
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['sparse_categorical_accuracy'])
+
+    model.summary()
+
+    # Save the best model
+    checkpoint = ModelCheckpoint(filepath=save_path,
+                                 monitor='val_sparse_categorical_accuracy',
+                                 save_best_only=True,
+                                 mode='max',
+                                 verbose=1)
+    
+    # Drops learning rate if the model stops improving, helping it fine-tune
+    lr_reduction = ReduceLROnPlateau(monitor='val_loss', 
+                                     patience=5, 
+                                     factor=0.5, 
+                                     min_lr=0.00001,
+                                     verbose=1)
+
+    # Train
+    print("\n🚀 Starting Training on Full Vocabulary...")
+    model.fit(X_train, y_train,
+              batch_size=batch_size,
+              epochs=epochs,
+              validation_data=(X_val, y_val),
+              callbacks=[checkpoint, lr_reduction])
+
+    # Save to Kaggle working directory
+    if "/kaggle/" in save_path:
+        shutil.move(save_path, "/kaggle/working/best_model_2731.keras")
+    else:
+        model.save(save_path)
+        
+    return load_model("/kaggle/working/best_model_2731.keras")
+
+# ==========================================
+# 3. EXECUTION SCRIPT
+# ==========================================
+(train_X, train_y), (val_X, val_y), (_, _), decoder = data_loader_full(
+    data_dir="/kaggle/input/citizen-asl-mediapipe-encoded-and-preprocessed",
+    gloss_to_index_dir='/kaggle/input/citizen-asl-mediapipe-encoded-and-preprocessed/gloss_to_index.json',
+    merge_test_to_train=True
+)
+
+# Save the full 2731-class mapping
+with open("/kaggle/working/index_to_gloss_2731.json", "w") as f:
+    json.dump(decoder, f, indent=2)
+print("✅ Saved index_to_gloss_2731.json")
+
+# Train the model
+model = train_gru_model_full(train_X, train_y, val_X, val_y)

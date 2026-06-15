@@ -132,6 +132,16 @@ function Select({
 export function Settings({ settings, devices, models, activeModelId, onSwitchModel, onUpdate, onReset, onClose }: SettingsProps) {
   const modalRef = useRef<HTMLDivElement>(null);
 
+  // Presentation-only model ordering for the selection list.
+  // Display order: Model 1, Model 4, Model 3, Model 2. Unknown ids fall to the end.
+  // Does NOT change model ids, activation, or backend ordering.
+  const MODEL_DISPLAY_ORDER = ['model1', 'model4', 'model3', 'model2'];
+  const orderedModels = [...models].sort((a, b) => {
+    const ia = MODEL_DISPLAY_ORDER.indexOf(a.id);
+    const ib = MODEL_DISPLAY_ORDER.indexOf(b.id);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+
   useEffect(() => {
     modalRef.current?.focus();
   }, []);
@@ -199,7 +209,7 @@ export function Settings({ settings, devices, models, activeModelId, onSwitchMod
               </div>
             ) : (
               <div className="py-3 space-y-2">
-                {models.map(model => (
+                {orderedModels.map(model => (
                   <div
                     key={model.id}
                     className={cn(

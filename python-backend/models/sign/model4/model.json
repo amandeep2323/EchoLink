@@ -1,0 +1,52 @@
+{
+  "name": "ASL-Citizen GRU (2731 Words)",
+  "model_file": "model4.xml",
+  "version": "1.0",
+  "author": "amandeep233 (ASL-Citizen GRU) / Toby Purbojo (keypoint preprocessing)",
+  "description": "Word-level ASL recognition using a GRU over MediaPipe Holistic keypoints (12 pose + 21 left hand + 21 right hand + 32 face = 86 landmarks, x/y). Trained on the ASL-Citizen dataset. Recognizes 2731 gloss classes. Runs on OpenVINO IR via the OpenVINO Runtime.",
+  "type": "word",
+  "labels": "labels.json",
+
+  "input": {
+    "landmark_source": "mediapipe_holistic",
+    "max_hands": 2,
+    "detection_confidence": 0.5,
+    "tracking_confidence": 0.5,
+    "model_complexity": 1,
+
+    "camera_resolution": [640, 480],
+    "recognition_frame_skip": 2,
+
+    "input_shape": [1, 150, 172],
+
+    "use_dimensions": 2,
+    "normalize": "none",
+    "feature_mode": "asl_citizen_86"
+  },
+
+  "inference": {
+    "type": "sequence",
+    "confidence_threshold": 0.30,
+    "backend": "openvino",
+    "sequence_length": 48,
+    "stride": 1,
+    "tensor_format": "frames_first",
+    "apply_softmax": false
+  },
+
+  "postprocess": {
+    "misrecognition_fixes": false,
+    "spell_correction": false,
+    "stability_frames": 5,
+    "repeat_frames": 30,
+    "max_consecutive": 1,
+    "cooldown_frames": 25,
+    "diff_cooldown_frames": 5,
+    "high_confidence_threshold": 0.60,
+    "high_confidence_frames": 2,
+    "smooth_window": 5,
+    "min_smooth_confidence": 0.35,
+    "word_timeout": 2.0,
+    "sentence_timeout": 4.0
+  }
+}

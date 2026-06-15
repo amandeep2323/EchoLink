@@ -837,6 +837,13 @@ class Landmarker:
         if feature_mode == "holistic_543x3":
             # Model3-compatible full holistic tensor: [543, 3]
             points = self._extract_holistic_543x3_points(results)
+        elif feature_mode == "signbart_holistic75":
+            # SignBart: [75, 2] = 33 pose + 21 left hand + 21 right hand (x, y)
+            points = self._extract_holistic_75x2_points(results)
+        elif feature_mode == "asl_citizen_86":
+            # Model 4 (ASL-Citizen GRU): [86, 2], anchor-normalized per frame
+            # 12 pose (filtered) + 21 LH + 21 RH + 32 face (x, y).
+            points = self._extract_asl_citizen_86_points(results)
         else:
             # Default compact representation used by WLASL-style models.
             h, w = frame.shape[:2]
@@ -1167,6 +1174,142 @@ class Landmarker:
             )
 
         return np.concatenate([face, left_hand, pose, right_hand], axis=0)
+
+    @staticmethod
+    def _extract_holistic_75x2_points(results) -> np.ndarray:
+        """
+        Extract MediaPipe Holistic landmarks in the SignBart order.
+
+        Output shape: [75, 2]  (x, y only)
+          - indices  0..32  : 33 pose landmarks
+          - indices 33..53  : 21 left-hand landmarks
+          - indices 54..74  : 21 right-hand landmarks
+
+        Missing groups are zero-filled (matches SignBart's (0,0) convention).
+        Coordinates are MediaPipe-normalized to [0, 1].
+        """
+        pose = np.zeros((33, 2), dtype=np.float32)
+        left_hand = np.zeros((21, 2), dtype=np.float32)
+        right_hand = np.zeros((21, 2), dtype=np.float32)
+
+        if results.pose_landmarks:
+            pose = np.array(
+                [[lm.x, lm.y] for lm in results.pose_landmarks.landmark],
+                dtype=np.float32,
+            )
+        if results.left_hand_landmarks:
+            left_hand = np.array(
+                [[lm.x, lm.y] for lm in results.left_hand_landmarks.landmark],
+                dtype=np.float32,
+            )
+        if results.right_hand_landmarks:
+            right_hand = np.array(
+                [[lm.x, lm.y] for lm in results.right_hand_landmarks.landmark],
+                dtype=np.float32,
+            )
+
+        return np.concatenate([pose, left_hand, right_hand], axis=0)
+
+    # ASL-Citizen (Model 4) constants
+    _ASL_CITIZEN_FACE_IDX = [
+        33, 133, 159, 145, 153, 144, 362, 263, 386, 374, 380, 373,
+        70, 63, 105, 66, 107, 295, 282, 320, 285, 318,
+        1, 168, 197, 4, 78, 308, 13, 14, 81, 311,
+    ]
+    _ASL_CITIZEN_POSE_KEEP = [
+        i for i in range(33)
+        if i not in (set(range(0, 11)) | set(range(23, 33)))
+    ]  # 12 pose points (idx 11..22)
+
+    @staticmethod
+    def _extract_asl_citizen_86_points(results) -> np.ndarray:
+        """
+        Extract MediaPipe Holistic landmarks for Model 4 (ASL-Citizen GRU),
+        then apply the author's per-frame anchor normalization.
+
+        Output shape: [86, 2] (x, y)
+          - idx  0..11 : 12 pose landmarks (face-region 0-10 and legs 23-32 dropped)
+          - idx 12..32 : 21 left-hand landmarks
+          - idx 33..53 : 21 right-hand landmarks
+          - idx 54..85 : 32 selected face landmarks
+
+        Missing groups are zero-filled (matches the (0,0) training convention).
+        Normalization is per-frame and independent, mirroring the verified
+        offline pipeline (preprocess_frame).
+        """
+        keep = Landmarker._ASL_CITIZEN_POSE_KEEP
+        face_idx = Landmarker._ASL_CITIZEN_FACE_IDX
+
+        if results.pose_landmarks:
+            lm = results.pose_landmarks.landmark
+            pose = np.array([[lm[i].x, lm[i].y] for i in keep], dtype=np.float32)
+        else:
+            pose = np.zeros((len(keep), 2), dtype=np.float32)
+
+        if results.left_hand_landmarks:
+            left_hand = np.array(
+                [[p.x, p.y] for p in results.left_hand_landmarks.landmark],
+                dtype=np.float32,
+            )
+        else:
+            left_hand = np.zeros((21, 2), dtype=np.float32)
+
+        if results.right_hand_landmarks:
+            right_hand = np.array(
+                [[p.x, p.y] for p in results.right_hand_landmarks.landmark],
+                dtype=np.float32,
+            )
+        else:
+            right_hand = np.zeros((21, 2), dtype=np.float32)
+
+        if results.face_landmarks:
+            fl = results.face_landmarks.landmark
+            face = np.array([[fl[i].x, fl[i].y] for i in face_idx], dtype=np.float32)
+        else:
+            face = np.zeros((len(face_idx), 2), dtype=np.float32)
+
+        points = np.concatenate([pose, left_hand, right_hand, face], axis=0)
+        return Landmarker._asl_citizen_preprocess_frame(points)
+
+    @staticmethod
+    def _asl_citizen_preprocess_frame(X: np.ndarray) -> np.ndarray:
+        """Per-frame anchor normalization (Toby Purbojo preprocessing).
+
+        Mirrors the verified offline `preprocess_frame`:
+          - neck-relative global normalization
+          - face block normalization (reference idx 79)
+          - left/right arm normalization
+          - per-hand bounding-box normalization
+        """
+        def distance(x1, x2):
+            d = x1 - x2
+            return (d[0] ** 2 + d[1] ** 2) ** 0.5
+
+        def anchor_norm(target, scale, reference):
+            return (target - reference) / (scale + 0.01)
+
+        def hand_normalize(hand):
+            xmin, xmax = np.min(hand[:, 0]), np.max(hand[:, 0])
+            ymin, ymax = np.min(hand[:, 1]), np.max(hand[:, 1])
+            width, height = xmax - xmin, ymax - ymin
+            cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
+            hand[:, 0] = (hand[:, 0] - cx) / width if width != 0 else 0
+            hand[:, 1] = (hand[:, 1] - cy) / height if height != 0 else 0
+            return hand
+
+        X = X.astype(np.float32).copy()
+        neck = abs(X[0] + X[1]) / 2
+        X[:] = anchor_norm(X[:], distance(X[0], X[1]), neck)
+        X[54:] = anchor_norm(X[54:], distance(X[0], X[1]), X[79])
+
+        left_arm = [2, 4, 6, 8, 10]
+        right_arm = [3, 5, 7, 9, 11]
+        X[left_arm] = anchor_norm(X[left_arm], distance(X[0], X[2]), X[0])
+        X[right_arm] = anchor_norm(X[right_arm], distance(X[1], X[3]), X[1])
+
+        X[12:33] = hand_normalize(X[12:33])
+        X[33:54] = hand_normalize(X[33:54])
+        return X
 
     @staticmethod
     def _extract_aggregate_3d_features(points: np.ndarray) -> np.ndarray:

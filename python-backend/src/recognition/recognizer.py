@@ -148,6 +148,9 @@ class Recognizer:
 
         # ── Sequence buffer (for sequence-based models) ──
         self._sequence_buffer: deque = deque()
+        self._is_signbart: bool = False
+        self._is_asl_citizen: bool = False
+        self._target_frames: Optional[int] = None
 
         # ── Timing ──
         self._last_hand_time: float = 0.0
@@ -246,6 +249,23 @@ class Recognizer:
         self._sequence_buffer = deque(
             self._sequence_buffer,
             maxlen=seq_len
+        )
+
+        # SignBart uses a dedicated holistic-75 + dual-input ONNX path
+        self._is_signbart = (
+            config.inference.backend == "signbart"
+            or getattr(config.input, "feature_mode", "") == "signbart_holistic75"
+        )
+
+        # Model 4 (ASL-Citizen GRU): holistic-86 + tile/pad to a fixed frame count
+        self._is_asl_citizen = (
+            getattr(config.input, "feature_mode", "") == "asl_citizen_86"
+        )
+        input_shape = getattr(config.input, "input_shape", [])
+        self._target_frames = (
+            input_shape[1]
+            if self._is_asl_citizen and isinstance(input_shape, (list, tuple)) and len(input_shape) >= 2
+            else None
         )
 
         # Load/unload spell corrector based on config
@@ -539,38 +559,12 @@ class Recognizer:
             if len(self._sequence_buffer) == seq_len:
                 # Build tensor based on model's tensor_format
                 stacked = np.stack(list(self._sequence_buffer), axis=0)
-                tensor_format = (
-                    getattr(self._config.inference, "tensor_format", "nodes_first")
-                    if self._config
-                    else "nodes_first"
-                )
-                
-                # Check if we're using aggregate features (1D per frame) or keypoints (2D per frame)
-                if stacked.ndim == 2:
-                    # Aggregate features: stacked shape is [frames, features]
-                    # e.g., [543, 3] for Model3
-                    tensor = np.expand_dims(stacked, axis=0).astype(np.float32)
+                if self._is_signbart:
+                    tensor = self._build_signbart_tensor(stacked)
+                elif self._is_asl_citizen:
+                    tensor = self._build_asl_citizen_tensor(stacked)
                 else:
-                    # Normal keypoints: stacked shape is [frames, nodes, coords]
-                    num_nodes = stacked.shape[1]
-                    num_coords = stacked.shape[2]
-
-                    if tensor_format == "frames_nodes_coords":
-                        # Format: [frames, nodes, coords] (raw sequence, no batch dim)
-                        # Used by Model3 ONNX exported from TFLite signature.
-                        tensor = stacked.astype(np.float32)
-                    elif tensor_format == "frames_first":
-                        # Format: [batch, frames, nodes*coords]
-                        # stacked shape: [frames, nodes, coords]
-                        tensor = stacked.reshape(seq_len, num_nodes * num_coords)
-                        tensor = np.expand_dims(tensor, axis=0).astype(np.float32)
-                    else:
-                        # Format: [batch, nodes, frames*coords] (default, for Model2)
-                        # stacked shape: [frames, nodes, coords]
-                        tensor = stacked.transpose(1, 0, 2).reshape(
-                            num_nodes, seq_len * num_coords
-                        )
-                        tensor = np.expand_dims(tensor, axis=0).astype(np.float32)
+                    tensor = self._build_generic_sequence_tensor(stacked, seq_len)
 
                 # Classify
                 word, confidence, top_3 = self._classify_raw(tensor)
@@ -667,6 +661,108 @@ class Recognizer:
             features, top_k=3
         )
         return sign, confidence, top_3
+
+    def _build_generic_sequence_tensor(self, stacked: np.ndarray, seq_len: int) -> np.ndarray:
+        """Build the input tensor for generic sequence models (Model 2/3 formats)."""
+        tensor_format = (
+            getattr(self._config.inference, "tensor_format", "nodes_first")
+            if self._config
+            else "nodes_first"
+        )
+
+        if stacked.ndim == 2:
+            # Aggregate features: stacked shape is [frames, features]
+            return np.expand_dims(stacked, axis=0).astype(np.float32)
+
+        num_nodes = stacked.shape[1]
+        num_coords = stacked.shape[2]
+
+        if tensor_format == "frames_nodes_coords":
+            # [frames, nodes, coords] (raw sequence, no batch dim) — Model3
+            return stacked.astype(np.float32)
+        elif tensor_format == "frames_first":
+            # [batch, frames, nodes*coords]
+            tensor = stacked.reshape(seq_len, num_nodes * num_coords)
+            return np.expand_dims(tensor, axis=0).astype(np.float32)
+        else:
+            # [batch, nodes, frames*coords] (default)
+            tensor = stacked.transpose(1, 0, 2).reshape(num_nodes, seq_len * num_coords)
+            return np.expand_dims(tensor, axis=0).astype(np.float32)
+
+    def _build_asl_citizen_tensor(self, stacked: np.ndarray) -> np.ndarray:
+        """Model 4 (ASL-Citizen GRU): tile/pad a (T, 86, 2) buffer to
+        (1, target_frames, 172).
+
+        Mirrors the verified offline `pad_video` (tile each landmark/coord to
+        the target frame count) + reshape to (target, 172) + batch dim. Frames
+        are already anchor-normalized by the landmarker.
+        """
+        target = self._target_frames or 150
+        if stacked.ndim != 3:
+            # Defensive: ensure (T, nodes, coords)
+            stacked = np.atleast_3d(stacked).astype(np.float32)
+        T = stacked.shape[0]
+        nodes, coords = stacked.shape[1], stacked.shape[2]
+
+        padded = np.zeros((target, nodes, coords), dtype=np.float32)
+        reps = int(target / T + 2) if T > 0 else 1
+        for landmark in range(nodes):
+            for coord in range(coords):
+                padded[:, landmark, coord] = np.tile(
+                    stacked[:, landmark, coord], reps
+                )[:target]
+
+        flat = padded.reshape(target, nodes * coords)  # (target, 172)
+        return np.expand_dims(flat, axis=0).astype(np.float32)
+
+    def _build_signbart_tensor(self, stacked: np.ndarray) -> np.ndarray:
+        """
+        Build the SignBart input tensor from a buffered sequence of holistic-75
+        keypoints. Output shape: (1, T, 75, 2), with per-part bounding-box
+        normalization applied exactly as in SignBart's dataset.py.
+
+        stacked: (T, 75, 2) raw MediaPipe-normalized keypoints in [0, 1].
+        """
+        seq = np.clip(stacked.astype(np.float32), 0.0, 1.0).copy()
+
+        # Joint groups (indices into the 75-keypoint layout): body, LH, RH.
+        groups = [
+            list(range(11, 17)),   # 6 body (shoulders, elbows, wrists)
+            list(range(33, 54)),   # 21 left hand
+            list(range(54, 75)),   # 21 right hand
+        ]
+        for t in range(seq.shape[0]):
+            for g in groups:
+                seq[t, g, :] = self._normalize_signbart_part(seq[t, g, :])
+
+        return np.expand_dims(seq, axis=0).astype(np.float32)
+
+    @staticmethod
+    def _normalize_signbart_part(keypoint: np.ndarray) -> np.ndarray:
+        """Per-part bounding-box normalization (matches SignBart dataset.py)."""
+        x_coords = keypoint[:, 0]
+        y_coords = keypoint[:, 1]
+        min_x, min_y = float(np.min(x_coords)), float(np.min(y_coords))
+        max_x, max_y = float(np.max(x_coords)), float(np.max(y_coords))
+        w = max_x - min_x
+        h = max_y - min_y
+
+        if w > h:
+            delta_x = 0.05 * w
+            delta_y = delta_x + ((w - h) / 2)
+        else:
+            delta_y = 0.05 * h
+            delta_x = delta_y + ((h - w) / 2)
+
+        s_point = [max(0, min(min_x - delta_x, 1)), max(0, min(min_y - delta_y, 1))]
+        e_point = [max(0, min(max_x + delta_x, 1)), max(0, min(max_y + delta_y, 1))]
+
+        out = keypoint.copy()
+        if (e_point[0] - s_point[0]) != 0.0:
+            out[:, 0] = (keypoint[:, 0] - s_point[0]) / (e_point[0] - s_point[0])
+        if (e_point[1] - s_point[1]) != 0.0:
+            out[:, 1] = (keypoint[:, 1] - s_point[1]) / (e_point[1] - s_point[1])
+        return out
 
     def _classify_raw(
         self, tensor: np.ndarray

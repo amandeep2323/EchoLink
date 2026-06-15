@@ -26,6 +26,7 @@ from .label_map import LabelMap
 # Backend type
 BACKEND_ONNX = "onnx"
 BACKEND_KERAS = "keras"
+BACKEND_SIGNBART = "signbart"
 
 
 class ModelLoader:
@@ -146,9 +147,31 @@ class ModelLoader:
         start = time.time()
 
         # Determine loading strategy based on format and config preference
-        preferred_backend = config.inference.backend  # "onnx" or "keras"
+        preferred_backend = config.inference.backend  # "onnx", "keras", "signbart"
 
-        if ext == ".onnx":
+        # SignBart (dual-input, OpenVINO Runtime) — handle before format dispatch
+        # since its model_file may be an .xml IR.
+        if config.inference.backend == "signbart":
+            self._load_signbart(model_path)
+
+        elif config.inference.backend == "openvino" or ext == ".xml":
+            # Generic single-input OpenVINO IR (.xml) — e.g. Model 4 (GRU).
+            # Loaded directly through the OpenVINO Runtime with LATENCY hint
+            # and model cache (handled inside _load_openvino_model).
+            try:
+                device = "AUTO" if use_gpu else "CPU"
+                self._load_openvino_model(model_path, device)
+            except Exception as e:
+                # Runtime fallback: try a sibling model.onnx via ONNX Runtime.
+                onnx_fallback = os.path.join(config.model_dir, "model.onnx")
+                print(f"[ModelLoader] OpenVINO IR load failed: {e}")
+                if os.path.exists(onnx_fallback):
+                    print(f"[ModelLoader] Falling back to ONNX Runtime: {onnx_fallback}")
+                    self._load_onnx_session(onnx_fallback, use_gpu)
+                else:
+                    raise
+
+        elif ext == ".onnx":
             # Check OpenVINO compatibility first
             if self._is_model_openvino_compatible(model_path):
                 # Prefer a pre-converted OpenVINO IR (.xml) if it exists next to
@@ -570,6 +593,8 @@ class ModelLoader:
             return "Model 2"
         elif "model3" in path:
             return "Model 3"
+        elif "model4" in path:
+            return "Model 4"
         return "Model"
 
     def _is_model_openvino_compatible(self, onnx_path: str) -> bool:
@@ -647,8 +672,57 @@ class ModelLoader:
         print(f"[ONNX Runtime]   Input: {self._input_name} {self._input_shape}")
         print(f"[ONNX Runtime]   Output: {self._output_name} {output_meta.shape}")
 
-    # ── Keras Direct Loading ────────────────────
+    # ── SignBart Backend (dual-input, OpenVINO Runtime) ──────
 
+    def _load_signbart(self, model_path: str) -> None:
+        """
+        Load a SignBart model (dual-input: keypoints + attention_mask) on the
+        OpenVINO Runtime. Prefers a pre-converted IR (.xml) next to the given
+        path; falls back to reading the ONNX directly through OpenVINO.
+
+        SignBart expects:
+          - keypoints      float32 (1, T, 75, 2)
+          - attention_mask float32 (1, T)
+        and returns logits (1, num_labels). The mask is built automatically
+        (all ones) inside predict_raw from the keypoints' time dimension.
+        """
+        if self._core is None:
+            self._initialize_openvino_core("CPU")
+
+        # Prefer the IR if present (model_file may already be the .xml).
+        ir_path = os.path.splitext(model_path)[0] + ".xml"
+        load_target = ir_path if os.path.exists(ir_path) else model_path
+        print(f"[SignBart] Loading model (OpenVINO): {load_target}")
+
+        model = self._core.read_model(model=load_target)
+
+        # Identify the two inputs by name: keypoints vs attention_mask.
+        self._input_name = None
+        self._mask_name = None
+        for port in model.inputs:
+            name = port.get_any_name()
+            if "mask" in name.lower():
+                self._mask_name = name
+            else:
+                self._input_name = name
+        if self._input_name is None:
+            self._input_name = model.inputs[0].get_any_name()
+        if self._mask_name is None:
+            self._mask_name = model.inputs[1].get_any_name()
+        self._output_name = model.output(0).get_any_name()
+
+        config = {"PERFORMANCE_HINT": "LATENCY"}
+        self._compiled_model = self._core.compile_model(
+            model=model, device_name=self._device, config=config
+        )
+        self._infer_request = self._compiled_model.create_infer_request()
+
+        self._backend = BACKEND_SIGNBART
+        self._loaded = True
+        print(f"[SignBart] ✓ Loaded via OpenVINO — inputs: {self._input_name}, "
+              f"{self._mask_name}; output: {self._output_name}")
+
+    # ── Keras Direct Loading ────────────────────
     def _load_keras_model(self, model_path: str) -> None:
         """Load model directly with Keras for inference."""
         from .converter import ModelConverter
@@ -722,6 +796,15 @@ class ModelLoader:
 
         if features.dtype != np.float32:
             features = features.astype(np.float32)
+
+        if self._backend == BACKEND_SIGNBART:
+            # features: (1, T, 75, 2). Build an all-ones attention mask (1, T).
+            T = features.shape[1]
+            mask = np.ones((features.shape[0], T), dtype=np.float32)
+            result = self._infer_request.infer(
+                inputs={self._input_name: features, self._mask_name: mask}
+            )
+            return np.array(result[self._output_name])
 
         if self._backend == "openvino":
             # Validate input shape

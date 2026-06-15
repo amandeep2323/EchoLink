@@ -43,13 +43,13 @@ Double-click `start.bat` in the project root. This opens two PowerShell windows:
 ┌──────────────────────┴──────────────────────────────────────────┐
 │  PYTHON BACKEND (FastAPI WebSocket Server on port 8765)         │
 │  ├── Camera Capture (OpenCV, threaded, disconnect recovery)    │
-│  ├── Landmark Extraction (MediaPipe Hands/Holistic or OpenPose)│
+│  ├── Landmark Extraction (MediaPipe Hands / Holistic)          │
 │  │     • Hands: 21 landmarks (fingerspelling)                  │
-│  │     • Holistic/OpenPose: 55 upper-body keypoints (word-level)│
+│  │     • Holistic: pose + hands keypoints (word-level)         │
 │  ├── Model Registry (config-driven, hot-swap models)           │
 │  ├── Sign Classifier — two inference modes:                    │
 │  │     • single_frame: PointNet → 24 letters (A-Y)             │
-│  │     • sequence: WLASL Pose-TGCN → 2000 words               │
+│  │     • sequence: SignBart → 1000 words / LSTM → 250 signs    │
 │  ├── Post-Processing (smoothing, stability, spell correct)     │
 │  ├── Frame Compositor (transcript bar, sign box, hand label)   │
 │  ├── Virtual Camera (pyvirtualcam → OBS Virtual Camera)        │
@@ -100,11 +100,10 @@ python-backend/models/
 │   │   ├── model.onnx               ← Original ONNX weights
 │   │   ├── model.xml + model.bin    ← OpenVINO IR (auto-generated)
 │   │   └── labels.json              ← Optional label map
-│   ├── model2/                      ← WLASL Word-Level (2000 words)
+│   ├── model2/                      ← SignBart WLASL (1000 words)
 │   │   ├── model.json               ← Model configuration
-│   │   ├── wlasl_pose_tgcn.onnx     ← Original ONNX weights
-│   │   ├── wlasl_pose_tgcn.xml/bin  ← OpenVINO IR (auto-generated)
-│   │   └── labels.json              ← 2000-word label map
+│   │   ├── signbart_wlasl1000.onnx  ← SignBart model (MediaPipe Holistic)
+│   │   └── labels.json              ← 1000-word label list
 │   └── model3/                      ← LSTM ASL Recognition (250 signs)
 │       ├── model.json               ← Model configuration
 │       ├── model.onnx               ← ONNX weights (stays ONNX — not IR-compatible)
@@ -127,13 +126,10 @@ python-backend/models/
 
 Restart the app after adding or switching models in the installed build.
 
-### Optional: OpenPose (for Model 2)
+### Optional: OpenPose
 
-Model2 expects OpenPose keypoints. Install OpenPose and set `OPENPOSE_DIR` so the
-backend can load the Python bindings and model files.
-
-> **Note**: OpenPose is CPU-intensive (~91% on typical systems). A replacement using
-> Intel OpenVINO Human Pose Estimation is planned — see `.kiro/model2plan.md`.
+> **Removed.** Model 2 is now **SignBart** (MediaPipe Holistic). OpenPose and the
+> `tools/openpose` folder have been removed — no OpenPose setup is needed.
 
 **Sign model formats**: `.onnx` (recommended), `.h5`, `.keras`, `.tflite` (auto-detected)
 

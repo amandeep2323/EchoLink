@@ -129,6 +129,7 @@ Invoke-Step "[2/6] Installing Python build dependencies" {
             "numpy",
             "sounddevice",
             "onnxruntime",
+            "openvino",
             "pyvirtualcam",
             "piper-tts",
             "pyttsx3",

@@ -28,6 +28,7 @@ datas = [
 
 datas += safe_collect_data("mediapipe")
 datas += safe_collect_data("onnxruntime")
+datas += safe_collect_data("openvino")
 datas += safe_collect_data("piper")
 
 hiddenimports = []
@@ -35,6 +36,7 @@ hiddenimports += safe_collect_submodules("uvicorn")
 hiddenimports += safe_collect_submodules("starlette")
 hiddenimports += safe_collect_submodules("mediapipe")
 hiddenimports += safe_collect_submodules("onnxruntime")
+hiddenimports += safe_collect_submodules("openvino")
 hiddenimports += safe_collect_submodules("piper")
 
 

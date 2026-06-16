@@ -36,7 +36,7 @@ htmlcov/
 venv/
 env/
 ENV/
-model4_tf_venv/*
+model4_tf_venv/
 
 # -----------------------------
 # App/runtime outputs
@@ -101,15 +101,10 @@ python-backend/models/tts/speecht5_openvino/
 _tmp_model3_source/
 
 # -----------------------------
-# SignBart (Model 2 replacement) — local-only artifacts
+# SignBart-main (deleted — model2 artifacts already in models/sign/model2/)
+# Kept in gitignore in case the folder reappears
 # -----------------------------
-SignBart-main/venv/
-SignBart-main/data/
-SignBart-main/pretrained_models/
-SignBart-main/checkpoints_*/
-SignBart-main/out-imgs/
-SignBart-main/*.log
-SignBart-main/*
+SignBart-main/
 
 python-backend/models/sign/model4/test_vidoes/
 python-backend/models/sign/model4/test_vidoes/*

@@ -22,9 +22,29 @@ def safe_collect_submodules(module_name: str):
         return []
 
 
-datas = [
-    (str(project_dir / "models"), "models"),
+datas = []
+
+# Bundle the models directory but EXCLUDE HuggingFace cache folders that
+# contain Windows-incompatible symlinks (models/tts/*/models--microsoft--*).
+# These TTS models auto-download on first run — they don't need bundling.
+_models_dir = project_dir / "models"
+_skip_patterns = [
+    "models--microsoft--",         # HuggingFace symlink caches (TTS)
+    "model4\\saved_model",         # Conversion intermediate
+    "model4/saved_model",          # Conversion intermediate (posix)
+    "test_vidoes",                 # Test videos (not needed in prod)
+    "best_model_2731.keras",       # Original source file (27 MB, only for reconversion)
 ]
+
+for item in _models_dir.rglob("*"):
+    if not item.is_file():
+        continue
+    # Skip HuggingFace cache symlink trees
+    rel = str(item.relative_to(project_dir))
+    if any(pat in rel for pat in _skip_patterns):
+        continue
+    dest_dir = str(item.parent.relative_to(project_dir))
+    datas.append((str(item), dest_dir))
 
 datas += safe_collect_data("mediapipe")
 datas += safe_collect_data("onnxruntime")

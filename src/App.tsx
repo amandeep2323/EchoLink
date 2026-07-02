@@ -8,6 +8,8 @@ import { ControlBar } from '@/components/ControlBar';
 import { Settings } from '@/components/Settings';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ToastContainer, useToast } from '@/components/Toast';
+import { ModeMenu } from '@/avatar/ModeMenu';
+import { getAvatarAPI } from '@/avatar/modeRouter';
 import type { PipelineSettings, ModelInfo } from '@/types';
 
 function formatDuration(seconds: number): string {
@@ -50,6 +52,17 @@ export function App() {
   // ── Track previous status for toast triggers ──
   const prevStatusRef = useRef(status);
   const prevBackendRef = useRef(backendOnline);
+
+  // ── Mutual exclusion: release webcam/pipeline when switching to AvatarLink ──
+  useEffect(() => {
+    const api = getAvatarAPI();
+    if (!api) return;
+    api.onModeChanged((mode) => {
+      if (mode === 'avatar') {
+        stopPipeline();
+      }
+    });
+  }, [stopPipeline]);
 
   useEffect(() => {
     const prev = prevStatusRef.current;
@@ -297,9 +310,7 @@ export function App() {
             <span className="text-lg leading-none">🤟</span>
           </div>
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-bold bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">
-              EchoLink
-            </h1>
+            <ModeMenu />
             <span className="text-[10px] text-slate-600 font-medium bg-slate-800/60 px-1.5 py-0.5 rounded-full">
               v1.0
             </span>

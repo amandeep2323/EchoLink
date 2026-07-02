@@ -1,0 +1,8 @@
+version: 1.0.0
+files:
+  - url: EchoLink-Setup-1.0.0.exe
+    sha512: 7YoB3UHOVHv1rgPp/gPwrjwajJekd76F60KMmFAjRXZ8ov6f+GOXJo2aEMVC3E4LduaeeGdlivDNT5QmmuvuRw==
+    size: 936079926
+path: EchoLink-Setup-1.0.0.exe
+sha512: 7YoB3UHOVHv1rgPp/gPwrjwajJekd76F60KMmFAjRXZ8ov6f+GOXJo2aEMVC3E4LduaeeGdlivDNT5QmmuvuRw==
+releaseDate: '2026-06-16T02:10:53.506Z'

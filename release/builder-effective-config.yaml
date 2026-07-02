@@ -1,0 +1,26 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.echolink.desktop
+productName: EchoLink
+asar: true
+files:
+  - filter:
+      - dist/**/*
+      - electron/**/*
+      - package.json
+extraResources:
+  - from: python-backend/dist/echolink-backend
+    to: backend
+    filter:
+      - '**/*'
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+electronVersion: 36.9.5

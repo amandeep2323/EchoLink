@@ -2,7 +2,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const http = require("node:http");
 const { spawn, spawnSync } = require("node:child_process");
-const { app, BrowserWindow, shell, dialog } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
 
 const DEFAULT_DEV_SERVER_URL = "http://127.0.0.1:5173";
 const BACKEND_HOST = "127.0.0.1";
@@ -11,6 +11,13 @@ const BACKEND_HEALTH_PATH = "/health";
 const BACKEND_START_TIMEOUT_MS = 30000;
 const BACKEND_RETRY_DELAY_MS = 1500;
 const isDev = !app.isPackaged;
+
+// ── AvatarLink (Avatar 3D mode) ──
+const AVATAR_BACKEND_PORT = 8770;
+const AVATAR_BACKEND_HEALTH_TIMEOUT_MS = 20000;
+let companionWindow = null;
+let avatarBackendProcess = null;
+let currentMode = "echolink"; // 'echolink' | 'avatar'
 
 let mainWindow = null;
 let backendProcess = null;
@@ -328,6 +335,161 @@ function stopBackend() {
   });
 }
 
+// ── AvatarLink: backend process + companion window + mode switching ──
+
+function resolveAvatarBackendCommand() {
+  const projectRoot = getProjectRoot();
+  const backendDir = app.isPackaged
+    ? path.join(process.resourcesPath, "avatar3d")
+    : path.join(projectRoot, "backend", "avatar3d");
+  const entry = path.join(backendDir, "app.py");
+
+  // Prefer the avatar backend's dedicated venv, then fall back to a discovered python.
+  const venvPython = path.join(backendDir, ".venv", "Scripts", "python.exe");
+  if (fs.existsSync(venvPython)) {
+    return { command: venvPython, args: [entry], cwd: backendDir };
+  }
+  const python = findDevPythonExecutable(projectRoot);
+  if (!python) return null;
+  return { command: python.command, args: [...python.args, entry], cwd: backendDir };
+}
+
+function checkHealth(port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: BACKEND_HOST, port, path: BACKEND_HEALTH_PATH, method: "GET", timeout: timeoutMs },
+      (res) => { res.resume(); resolve(res.statusCode === 200); }
+    );
+    req.on("timeout", () => { req.destroy(); resolve(false); });
+    req.on("error", () => resolve(false));
+    req.end();
+  });
+}
+
+async function waitForReady(port, maxWaitMs) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    if (await checkHealth(port)) return true;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+async function startAvatarBackend() {
+  if (avatarBackendProcess) return true;
+  const backend = resolveAvatarBackendCommand();
+  if (!backend || !fs.existsSync(backend.cwd)) {
+    log("Avatar backend not found — tokenizer will be unavailable.");
+    return false;
+  }
+  log(`Starting avatar backend: ${backend.command} ${backend.args.join(" ")}`);
+  avatarBackendProcess = spawn(backend.command, backend.args, {
+    cwd: backend.cwd,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+  });
+  avatarBackendProcess.stdout?.on("data", (c) => appendLog(`[Avatar] ${c}`.trimEnd()));
+  avatarBackendProcess.stderr?.on("data", (c) => appendLog(`[Avatar] ${c}`.trimEnd()));
+  avatarBackendProcess.once("exit", (code) => {
+    log(`Avatar backend exited (code=${code}).`);
+    avatarBackendProcess = null;
+  });
+  return waitForReady(AVATAR_BACKEND_PORT, AVATAR_BACKEND_HEALTH_TIMEOUT_MS);
+}
+
+function stopAvatarBackend() {
+  return new Promise((resolve) => {
+    const proc = avatarBackendProcess;
+    if (!proc) return resolve();
+    avatarBackendProcess = null;
+    proc.once("exit", () => resolve());
+    try {
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/pid", String(proc.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+      } else {
+        proc.kill("SIGTERM");
+      }
+    } catch (e) {
+      log(`Error stopping avatar backend: ${e.message}`);
+      resolve();
+    }
+  });
+}
+
+function createCompanionWindow() {
+  companionWindow = new BrowserWindow({
+    width: 360,
+    height: 480,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: true,
+    hasShadow: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  companionWindow.setAlwaysOnTop(true, "screen-saver");
+
+  if (isDev) {
+    const devUrl = process.env.VITE_DEV_SERVER_URL || DEFAULT_DEV_SERVER_URL;
+    companionWindow.loadURL(`${devUrl}#/avatar`);
+  } else {
+    companionWindow.loadFile(path.join(app.getAppPath(), "dist", "index.html"), { hash: "/avatar" });
+  }
+
+  companionWindow.on("closed", () => {
+    companionWindow = null;
+    // If the companion is closed directly, fall back to EchoLink.
+    if (currentMode === "avatar") {
+      void switchMode("echolink");
+    }
+  });
+}
+
+async function switchMode(mode) {
+  if (mode === currentMode && mode === "avatar" && companionWindow) return currentMode;
+
+  if (mode === "avatar") {
+    // Tell EchoLink renderer to release the webcam/pipeline, then hide it.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("mode:changed", "avatar");
+    }
+    await startAvatarBackend(); // graceful if it fails; widget shows offline
+    if (!companionWindow) createCompanionWindow();
+    companionWindow.show();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+    currentMode = "avatar";
+  } else {
+    // Back to EchoLink: tear down avatar resources.
+    if (companionWindow && !companionWindow.isDestroyed()) {
+      companionWindow.close();
+    }
+    await stopAvatarBackend();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.webContents.send("mode:changed", "echolink");
+    }
+    currentMode = "echolink";
+  }
+  return currentMode;
+}
+
+function registerAvatarIpc() {
+  ipcMain.handle("mode:switch", async (_e, mode) => {
+    if (mode !== "echolink" && mode !== "avatar") return currentMode;
+    return switchMode(mode);
+  });
+  ipcMain.handle("avatar:close", async () => switchMode("echolink"));
+  ipcMain.handle("mode:get", async () => currentMode);
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -379,13 +541,16 @@ app.on("before-quit", (event) => {
   }
   isQuitting = true;
   event.preventDefault();
-  stopBackend().finally(() => {
-    app.exit(0);
-  });
+  Promise.resolve(stopAvatarBackend())
+    .then(() => stopBackend())
+    .finally(() => {
+      app.exit(0);
+    });
 });
 
 app.whenReady().then(() => {
   initLogging();
+  registerAvatarIpc();
   void startBackend();
   createMainWindow();
 

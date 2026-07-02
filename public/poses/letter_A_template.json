@@ -1,0 +1,30 @@
+{
+  "id": "letter_A",
+  "side": "right",
+  "description": "ASL fingerspelling letter A — closed fist, thumb alongside the index finger. TEMPLATE: tune the Euler-degree values against your specific Ready Player Me model.",
+  "rotations": {
+    "RightArm": [60, 0, 10],
+    "RightForeArm": [0, 0, 0],
+    "RightHand": [0, 0, 0],
+
+    "RightHandThumb1": [10, 0, -20],
+    "RightHandThumb2": [0, 0, -10],
+    "RightHandThumb3": [0, 0, -5],
+
+    "RightHandIndex1": [85, 0, 0],
+    "RightHandIndex2": [90, 0, 0],
+    "RightHandIndex3": [40, 0, 0],
+
+    "RightHandMiddle1": [85, 0, 0],
+    "RightHandMiddle2": [90, 0, 0],
+    "RightHandMiddle3": [40, 0, 0],
+
+    "RightHandRing1": [85, 0, 0],
+    "RightHandRing2": [90, 0, 0],
+    "RightHandRing3": [40, 0, 0],
+
+    "RightHandPinky1": [85, 0, 0],
+    "RightHandPinky2": [90, 0, 0],
+    "RightHandPinky3": [40, 0, 0]
+  }
+}
